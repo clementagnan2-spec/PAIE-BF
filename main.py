@@ -78,13 +78,40 @@ class App(tk.Tk):
         except tk.TclError:
             pass
 
-        self.config_data = storage.load()
+        # IMPORTANT : sans ceci, toute erreur inattendue survenant dans un
+        # bouton/callback Tkinter est silencieuse (surtout dans un .exe
+        # compilé en mode "fenêtre", sans console) -- l'utilisateur voit
+        # juste "rien ne se passe". On l'affiche désormais dans une boîte
+        # de dialogue explicite, avec le détail technique, pour pouvoir
+        # diagnostiquer immédiatement.
+        self.report_callback_exception = self._show_error
+
+        try:
+            self.config_data = storage.load()
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur au démarrage",
+                "Impossible de charger/créer le fichier de données local.\n\n"
+                f"Détail technique : {exc}\n\n"
+                "Vérifiez que l'application a le droit d'écrire dans votre "
+                "dossier utilisateur (essayez de la lancer en tant "
+                "qu'administrateur, ou vérifiez qu'un antivirus ne la bloque pas).")
+            raise
         self.role = None  # "admin" ou "user"
 
         self.container = ttk.Frame(self)
         self.container.pack(fill="both", expand=True)
 
         self.show_login()
+
+    def _show_error(self, exc_type, exc_value, exc_tb):
+        import traceback
+        detail = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        messagebox.showerror(
+            "Erreur inattendue",
+            f"Une erreur s'est produite :\n\n{exc_value}\n\n"
+            "Détail technique (à transmettre au support si le problème persiste) :\n"
+            f"{detail[-1200:]}")
 
     # ------------------------------------------------------------------
     def clear(self):
@@ -380,6 +407,22 @@ class EmployeesTab(ttk.Frame):
             return None
         return emp
 
+    def _save_or_report(self):
+        """Enregistre les données locales ; affiche une erreur claire en cas
+        d'échec (ex: permissions) au lieu de laisser l'action passer inaperçue."""
+        try:
+            storage.save(self.app.config_data)
+            return True
+        except Exception as exc:
+            messagebox.showerror(
+                "Impossible d'enregistrer",
+                "L'enregistrement local a échoué. Vérifiez que l'application "
+                "peut écrire dans votre dossier utilisateur (lancez-la en tant "
+                "qu'administrateur, ou vérifiez qu'un antivirus/Windows Defender "
+                "ne la bloque pas).\n\n"
+                f"Détail technique : {exc}")
+            return False
+
     def add_employee(self):
         emp = self._read_form()
         if emp is None:
@@ -387,9 +430,15 @@ class EmployeesTab(ttk.Frame):
         emp.numero = self.app.config_data["next_numero"]
         self.app.config_data["employees"].append(emp.to_dict())
         self.app.config_data["next_numero"] += 1
-        storage.save(self.app.config_data)
+        if not self._save_or_report():
+            # on annule l'ajout en mémoire si l'enregistrement a échoué,
+            # pour ne pas désynchroniser l'affichage et le fichier de données
+            self.app.config_data["employees"].pop()
+            self.app.config_data["next_numero"] -= 1
+            return
         self.refresh_tree()
         self.clear_form()
+        messagebox.showinfo("Ajouté", f"Employé « {emp.nom_prenoms} » ajouté avec succès.")
 
     def update_employee(self):
         if self.selected_numero is None:
@@ -403,7 +452,8 @@ class EmployeesTab(ttk.Frame):
             if e["numero"] == self.selected_numero:
                 employees[i] = emp.to_dict()
                 break
-        storage.save(self.app.config_data)
+        if not self._save_or_report():
+            return
         self.refresh_tree()
 
     def delete_employee(self):
@@ -414,7 +464,8 @@ class EmployeesTab(ttk.Frame):
             return
         employees = self.app.config_data["employees"]
         self.app.config_data["employees"] = [e for e in employees if e["numero"] != self.selected_numero]
-        storage.save(self.app.config_data)
+        if not self._save_or_report():
+            return
         self.refresh_tree()
         self.clear_form()
 
