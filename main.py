@@ -22,7 +22,7 @@ import storage
 from payroll_engine import Employee, compute_payslip, DEFAULT_PARAMS
 
 APP_TITLE = "Paie Burkina — Traitement des salaires mensuels"
-PAID_SOFTWARE_NOTICE = "⚠ Ce logiciel est payant. Toute utilisation non autorisée est interdite."
+PAID_SOFTWARE_NOTICE = "Ce logiciel de paie est payant : consultanter280@gmmail.com"
 
 MOIS_FR = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet",
            "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
@@ -32,8 +32,12 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("1100x680")
-        self.minsize(950, 600)
+        self.geometry("1250x720")
+        self.minsize(1000, 620)
+        try:
+            self.state("zoomed")  # démarre en fenêtre maximisée sous Windows
+        except tk.TclError:
+            pass
 
         self.config_data = storage.load()
         self.role = None  # "admin" ou "user"
@@ -162,6 +166,9 @@ class MainScreen(ttk.Frame):
         self.payroll_tab = PayrollTab(notebook, app, self.employees_tab)
         notebook.add(self.payroll_tab, text="Bulletins / État de paie")
 
+        self.accounting_tab = AccountingTab(notebook, app, self.payroll_tab)
+        notebook.add(self.accounting_tab, text="Écritures comptables")
+
         if app.role == "admin":
             self.params_tab = ParamsTab(notebook, app)
             notebook.add(self.params_tab, text="Paramètres de paie")
@@ -197,6 +204,26 @@ class EmployeesTab(ttk.Frame):
         super().__init__(parent)
         self.app = app
 
+        # --- Barre d'import en masse (Excel/CSV), utile quand il y a beaucoup
+        # d'employés à saisir : on remplit un fichier plutôt que le formulaire.
+        toolbar = ttk.Frame(self)
+        toolbar.pack(side="top", fill="x", padx=6, pady=(6, 0))
+        ttk.Label(toolbar, text="Saisie volumineuse :", font=("Segoe UI", 9, "bold")).pack(side="left")
+        ttk.Button(toolbar, text="Importer depuis Excel/CSV",
+                   command=self.import_from_file).pack(side="left", padx=(8, 4))
+        ttk.Button(toolbar, text="Télécharger le modèle Excel",
+                   command=self.download_template).pack(side="left", padx=4)
+
+        # IMPORTANT : on réserve d'abord la place du panneau de droite (largeur
+        # fixe) AVANT de placer le tableau (qui a beaucoup de colonnes et
+        # utilise fill="both", expand=True). Si on faisait l'inverse, le
+        # tableau engloutirait toute la largeur de la fenêtre et le panneau
+        # de saisie serait poussé hors champ (invisible), même s'il existe
+        # bien dans le code.
+        right = ttk.Frame(self, width=340)
+        right.pack(side="right", fill="y")
+        right.pack_propagate(False)  # garde la largeur réservée même si le contenu est plus petit
+
         left = ttk.Frame(self)
         left.pack(side="left", fill="both", expand=True, padx=(0, 6))
 
@@ -205,16 +232,17 @@ class EmployeesTab(ttk.Frame):
         for key, label, width in COLUMNS:
             self.tree.heading(key, text=label)
             self.tree.column(key, width=width, anchor="center")
-        self.tree.pack(fill="both", expand=True, side="left")
+        self.tree.grid(row=0, column=0, sticky="nsew")
 
         vsb = ttk.Scrollbar(left, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
+        hsb = ttk.Scrollbar(left, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        left.grid_rowconfigure(0, weight=1)
+        left.grid_columnconfigure(0, weight=1)
 
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
-
-        right = ttk.Frame(self, width=320)
-        right.pack(side="right", fill="y")
 
         ttk.Label(right, text="Fiche employé", font=("Segoe UI", 11, "bold")).pack(pady=(4, 10))
 
@@ -355,6 +383,195 @@ class EmployeesTab(ttk.Frame):
         for key, var in self.form_vars.items():
             var.set(str(emp.get(key, "")))
 
+    # ------------------------------------------------------------------
+    # IMPORT EN MASSE (Excel / CSV)
+    # ------------------------------------------------------------------
+
+    # En-têtes reconnus dans le fichier importé -> champ interne de l'employé.
+    # Plusieurs variantes acceptées pour plus de souplesse (accents, casse
+    # ignorés à la comparaison).
+    IMPORT_HEADER_MAP = {
+        "nom & prenoms": "nom_prenoms", "nom et prenoms": "nom_prenoms",
+        "nom & prénoms": "nom_prenoms", "nom prenoms": "nom_prenoms", "nom": "nom_prenoms",
+        "classification": "classification", "classif": "classification", "classif.": "classification",
+        "salaire de base": "salaire_base", "sal de base": "salaire_base", "sal. base": "salaire_base",
+        "prime d'anciennete": "prime_anciennete", "prime anciennete": "prime_anciennete",
+        "prime anc.": "prime_anciennete", "prim anc": "prime_anciennete",
+        "heures supplementaires": "heures_sup", "heures sup": "heures_sup", "heure sup": "heures_sup",
+        "sursalaire": "sursalaire",
+        "gratification": "gratification", "gratif.": "gratification", "gratif": "gratification",
+        "indemnite caisse": "indemnite_caisse", "indem. caisse": "indemnite_caisse", "caisse": "indemnite_caisse",
+        "indemnite logement": "indemnite_logement", "indem. log.": "indemnite_logement", "log": "indemnite_logement",
+        "indemnite fonction": "indemnite_fonction", "indem. fct.": "indemnite_fonction", "fct": "indemnite_fonction",
+        "indemnite transport": "indemnite_transport", "indem. trprt": "indemnite_transport", "trprt": "indemnite_transport",
+        "personnes a charge": "personnes_a_charge", "pers. charge": "personnes_a_charge", "charges": "personnes_a_charge",
+        "retenue pret/avance": "retenue_pret", "retenue pret": "retenue_pret", "retenue prêt": "retenue_pret",
+    }
+
+    @staticmethod
+    def _normalize_header(text):
+        import unicodedata
+        text = str(text or "").strip().lower()
+        text = "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
+        return text
+
+    def _parse_rows(self, path):
+        """Lit un fichier .xlsx ou .csv et retourne une liste de dicts
+        {champ_interne: valeur_brute}, à partir de la ligne d'en-tête."""
+        ext = path.lower().rsplit(".", 1)[-1]
+        header_map = {self._normalize_header(k): v for k, v in self.IMPORT_HEADER_MAP.items()}
+
+        if ext in ("xlsx", "xlsm"):
+            import openpyxl
+            wb = openpyxl.load_workbook(path, data_only=True)
+            ws = wb.active
+            all_rows = list(ws.iter_rows(values_only=True))
+        elif ext == "csv":
+            import csv
+            with open(path, "r", encoding="utf-8-sig", newline="") as f:
+                sample = f.read(4096)
+                f.seek(0)
+                try:
+                    dialect = csv.Sniffer().sniff(sample, delimiters=";,")
+                except csv.Error:
+                    dialect = csv.excel
+                    dialect.delimiter = ";" if sample.count(";") > sample.count(",") else ","
+                reader = csv.reader(f, dialect)
+                all_rows = [tuple(row) for row in reader]
+        else:
+            raise ValueError("Format non pris en charge (utilisez .xlsx ou .csv).")
+
+        if not all_rows:
+            return []
+
+        header_row = all_rows[0]
+        field_by_col = {}
+        for idx, h in enumerate(header_row):
+            norm = self._normalize_header(h)
+            if norm in header_map:
+                field_by_col[idx] = header_map[norm]
+
+        if "nom_prenoms" not in field_by_col.values():
+            raise ValueError("Colonne obligatoire manquante : « Nom & Prénoms ».\n"
+                              "Utilisez le bouton « Télécharger le modèle Excel » pour avoir "
+                              "les bons en-têtes.")
+
+        records = []
+        for row in all_rows[1:]:
+            if row is None or all(c in (None, "") for c in row):
+                continue
+            rec = {}
+            for idx, field in field_by_col.items():
+                if idx < len(row):
+                    rec[field] = row[idx]
+            records.append(rec)
+        return records
+
+    def import_from_file(self):
+        path = filedialog.askopenfilename(
+            title="Importer des employés",
+            filetypes=[("Excel / CSV", "*.xlsx *.xlsm *.csv"), ("Tous les fichiers", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            records = self._parse_rows(path)
+        except Exception as exc:
+            messagebox.showerror("Import impossible", str(exc))
+            return
+
+        if not records:
+            messagebox.showinfo("Import", "Aucune ligne exploitable trouvée dans ce fichier.")
+            return
+
+        def to_float(v):
+            if v is None or v == "":
+                return 0.0
+            if isinstance(v, str):
+                v = v.replace(" ", "").replace(",", ".")
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return 0.0
+
+        imported, skipped = 0, 0
+        for rec in records:
+            nom = str(rec.get("nom_prenoms", "")).strip()
+            if not nom:
+                skipped += 1
+                continue
+            classification = str(rec.get("classification", "AUTRE") or "AUTRE").strip().upper()
+            if classification not in ("CADRE", "AUTRE"):
+                classification = "AUTRE"
+            emp = Employee(
+                numero=self.app.config_data["next_numero"],
+                nom_prenoms=nom,
+                classification=classification,
+                salaire_base=to_float(rec.get("salaire_base")),
+                prime_anciennete=to_float(rec.get("prime_anciennete")),
+                heures_sup=to_float(rec.get("heures_sup")),
+                sursalaire=to_float(rec.get("sursalaire")),
+                gratification=to_float(rec.get("gratification")),
+                indemnite_caisse=to_float(rec.get("indemnite_caisse")),
+                indemnite_logement=to_float(rec.get("indemnite_logement")),
+                indemnite_fonction=to_float(rec.get("indemnite_fonction")),
+                indemnite_transport=to_float(rec.get("indemnite_transport")),
+                personnes_a_charge=int(to_float(rec.get("personnes_a_charge"))),
+                retenue_pret=to_float(rec.get("retenue_pret")),
+                date_saisie=datetime.date.today().isoformat(),
+            )
+            self.app.config_data["employees"].append(emp.to_dict())
+            self.app.config_data["next_numero"] += 1
+            imported += 1
+
+        storage.save(self.app.config_data)
+        self.refresh_tree()
+        msg = f"{imported} employé(s) importé(s)."
+        if skipped:
+            msg += f"\n{skipped} ligne(s) ignorée(s) (nom manquant)."
+        messagebox.showinfo("Import terminé", msg)
+
+    def download_template(self):
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill
+        except ImportError:
+            messagebox.showerror("Module manquant",
+                                  "Le module 'openpyxl' n'est pas installé.\n"
+                                  "Installez-le avec : pip install openpyxl")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Classeur Excel", "*.xlsx")],
+            initialfile="Modele_import_employes.xlsx",
+        )
+        if not path:
+            return
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Employés"
+        headers = ["Nom & Prénoms", "Classification", "Salaire de base", "Prime d'ancienneté",
+                   "Heures supplémentaires", "Sursalaire", "Gratification", "Indemnité Caisse",
+                   "Indemnité Logement", "Indemnité Fonction", "Indemnité Transport",
+                   "Personnes à charge", "Retenue prêt/avance"]
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1F4E78")
+        ws.append(["KABORE Awa", "AUTRE", 150000, 5000, 0, 0, 0, 10000, 30000, 15000, 20000, 2, 0])
+        for col in ws.columns:
+            length = max((len(str(c.value)) for c in col if c.value is not None), default=12)
+            ws.column_dimensions[col[0].column_letter].width = max(14, length + 2)
+        wb.save(path)
+        messagebox.showinfo(
+            "Modèle créé",
+            f"Modèle enregistré :\n{path}\n\n"
+            "Remplissez une ligne par employé (la classification doit être "
+            "CADRE ou AUTRE), puis utilisez « Importer depuis Excel/CSV ».")
+
 
 # ==========================================================================
 # ONGLET BULLETINS / ÉTAT DE PAIE
@@ -382,17 +599,26 @@ class PayrollTab(ttk.Frame):
 
         result_cols = ["numero", "nom_prenoms", "remuneration_totale", "cnss_salariale",
                         "salaire_brut", "base_imposable", "iuts_net", "salaire_net",
-                        "retenue_pret", "net_percu", "cout_total_employeur"]
+                        "retenue_obligatoire", "retenue_pret", "net_percu", "cout_total_employeur"]
         headers = ["N°", "Nom & Prénoms", "Rém. Totale", "CNSS", "Sal. Brut",
-                   "Base Imposable", "IUTS", "Salaire Net", "Ret. Prêt",
-                   "Net Perçu", "Coût Employeur"]
+                   "Base Imposable", "IUTS", "Salaire Net", "Ret. Oblig. 1%",
+                   "Ret. Prêt", "Net Perçu", "Coût Employeur"]
 
         self.result_cols = result_cols
-        self.tree = ttk.Treeview(self, columns=result_cols, show="headings", height=20)
+        tree_frame = ttk.Frame(self)
+        tree_frame.pack(fill="both", expand=True, padx=6, pady=6)
+        self.tree = ttk.Treeview(tree_frame, columns=result_cols, show="headings", height=20)
         for key, label in zip(result_cols, headers):
             self.tree.heading(key, text=label)
             self.tree.column(key, width=105, anchor="center")
-        self.tree.pack(fill="both", expand=True, padx=6, pady=6)
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
 
         totals = ttk.Frame(self)
         totals.pack(fill="x", padx=6, pady=(0, 6))
@@ -406,7 +632,7 @@ class PayrollTab(ttk.Frame):
         employees = self.app.config_data["employees"]
         self.tree.delete(*self.tree.get_children())
         results = []
-        total_net = total_cnss = total_iuts = total_cout = 0.0
+        total_net = total_cnss = total_iuts = total_cout = total_ro = 0.0
         for e in employees:
             emp = Employee(**e)
             r = compute_payslip(emp, params)
@@ -417,10 +643,12 @@ class PayrollTab(ttk.Frame):
             total_cnss += r["cnss_total"]
             total_iuts += r["iuts_net"]
             total_cout += r["cout_total_employeur"]
+            total_ro += r["retenue_obligatoire"]
         self.last_results = results
         self.totals_label.config(
             text=(f"Total Net Perçu : {total_net:,.0f}  |  Total CNSS : {total_cnss:,.0f}  |  "
-                  f"Total IUTS : {total_iuts:,.0f}  |  Coût total employeur : {total_cout:,.0f}  FCFA")
+                  f"Total IUTS : {total_iuts:,.0f}  |  Total Ret. Oblig. : {total_ro:,.0f}  |  "
+                  f"Coût total employeur : {total_cout:,.0f}  FCFA")
             .replace(",", " ")
         )
         if not employees:
@@ -459,7 +687,7 @@ class PayrollTab(ttk.Frame):
 
         headers = ["N°", "Nom & Prénoms", "Classification", "Rém. Totale", "CNSS Salariale",
                    "Salaire Brut", "Base Imposable", "IUTS Net", "Salaire Net",
-                   "Retenue Prêt", "Net Perçu", "Coût Total Employeur"]
+                   "Retenue Obligatoire 1%", "Retenue Prêt", "Net Perçu", "Coût Total Employeur"]
         ws.append([])
         ws.append(headers)
         header_row = ws.max_row
@@ -472,12 +700,207 @@ class PayrollTab(ttk.Frame):
             ws.append([
                 r["numero"], r["nom_prenoms"], r["classification"], r["remuneration_totale"],
                 r["cnss_salariale"], r["salaire_brut"], r["base_imposable"], r["iuts_net"],
-                r["salaire_net"], r["retenue_pret"], r["net_percu"], r["cout_total_employeur"],
+                r["salaire_net"], r["retenue_obligatoire"], r["retenue_pret"], r["net_percu"],
+                r["cout_total_employeur"],
             ])
 
         for col in ws.columns:
             length = max((len(str(c.value)) for c in col if c.value is not None), default=10)
             ws.column_dimensions[col[0].column_letter].width = max(12, length + 2)
+
+        notice_row = ws.max_row + 2
+        ws.cell(row=notice_row, column=1, value=PAID_SOFTWARE_NOTICE).font = Font(italic=True, color="B8860B")
+
+        wb.save(path)
+        messagebox.showinfo("Export réussi", f"Fichier exporté :\n{path}")
+
+
+# ==========================================================================
+# ONGLET ÉCRITURES COMPTABLES
+# ==========================================================================
+# Génère l'écriture de paie en partie double (Débit / Crédit), à partir des
+# résultats calculés dans l'onglet "Bulletins / État de paie". Comptes basés
+# sur le plan comptable SYSCOHADA habituellement utilisé pour la paie.
+
+ACCOUNTING_ACCOUNTS = {
+    "salaire_base": ("661100", "Salaires de base"),
+    "primes_gratif": ("661200", "Primes d'ancienneté et gratifications"),
+    "heures_sursal": ("661800", "Heures supplémentaires et sursalaire"),
+    "indemnite_caisse": ("663800", "Indemnité de caisse"),
+    "indemnite_logement": ("663100", "Indemnité de logement"),
+    "indemnite_fonction": ("663200", "Indemnité de fonction"),
+    "indemnite_transport": ("663400", "Indemnité de transport"),
+    "salaire_net": ("422000", "Salaires nets à payer"),
+    "retenue_obligatoire": ("447220", "Retenue obligatoire (RO) sur salaires"),
+    "retenue_pret": ("421000", "Retenues sur avances / prêts au personnel"),
+    "cnss_salariale": ("431300", "CNSS — part salariale"),
+    "iuts_net": ("447210", "IUTS retenu à la source"),
+    "cnss_patronale": ("664100", "Charges sociales — CNSS patronale"),
+    "cnss_patronale_credit": ("431300", "CNSS — part patronale"),
+    "tpa": ("664200", "Taxe patronale d'apprentissage (TPA)"),
+    "tpa_credit": ("447230", "TPA à reverser"),
+}
+
+
+class AccountingTab(ttk.Frame):
+    def __init__(self, parent, app: App, payroll_tab: "PayrollTab"):
+        super().__init__(parent)
+        self.app = app
+        self.payroll_tab = payroll_tab
+
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=6, pady=6)
+        ttk.Label(top, text="Écritures comptables de la paie (partie double)",
+                  font=("Segoe UI", 11, "bold")).pack(side="left")
+        ttk.Button(top, text="Générer à partir de l'état de paie",
+                   command=self.generate).pack(side="left", padx=16)
+        ttk.Button(top, text="Exporter vers Excel", command=self.export_excel).pack(side="left")
+
+        cols = ["compte", "libelle", "debit", "credit"]
+        headers = ["N° Compte", "Libellé", "Débit", "Crédit"]
+        tree_frame = ttk.Frame(self)
+        tree_frame.pack(fill="both", expand=True, padx=6, pady=6)
+        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=20)
+        widths = [100, 380, 130, 130]
+        for key, label, w in zip(cols, headers, widths):
+            self.tree.heading(key, text=label)
+            self.tree.column(key, width=w, anchor="center" if key != "libelle" else "w")
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+
+        self.totals_label = ttk.Label(self, text="", font=("Segoe UI", 10, "bold"))
+        self.totals_label.pack(anchor="w", padx=6, pady=(0, 6))
+
+        self.last_rows = []
+
+    def _build_rows(self, results):
+        def s(key):
+            return sum(r[key] for r in results)
+
+        rows = []
+        # sommes brutes par nature (issues directement des fiches employés, pas des résultats calculés)
+        employees = [Employee(**e) for e in self.app.config_data["employees"]]
+        sum_sal_base = sum(e.salaire_base for e in employees)
+        sum_primes = sum(e.prime_anciennete + e.gratification for e in employees)
+        sum_hs = sum(e.heures_sup + e.sursalaire for e in employees)
+        sum_caisse = sum(e.indemnite_caisse for e in employees)
+        sum_log = sum(e.indemnite_logement for e in employees)
+        sum_fct = sum(e.indemnite_fonction for e in employees)
+        sum_trp = sum(e.indemnite_transport for e in employees)
+
+        rows.append(("661100", "SALAIRES DE BASE", sum_sal_base, 0))
+        rows.append(("661200", "PRIMES ANCIENNETÉ ET GRATIFICATIONS", sum_primes, 0))
+        rows.append(("661800", "HEURES SUPPLÉMENTAIRES ET SURSALAIRE", sum_hs, 0))
+        rows.append(("663800", "INDEMNITÉ DE CAISSE", sum_caisse, 0))
+        rows.append(("663100", "INDEMNITÉ DE LOGEMENT", sum_log, 0))
+        rows.append(("663200", "INDEMNITÉ DE FONCTION", sum_fct, 0))
+        rows.append(("663400", "INDEMNITÉ DE TRANSPORT", sum_trp, 0))
+
+        total_net = s("net_percu")
+        total_ro = s("retenue_obligatoire")
+        total_pret = s("retenue_pret")
+        total_cnss_sal = s("cnss_salariale")
+        total_iuts = s("iuts_net")
+
+        rows.append(("422000", "SALAIRES NETS À PAYER", 0, total_net))
+        rows.append(("447220", "RETENUE OBLIGATOIRE (RO) SUR SALAIRES", 0, total_ro))
+        rows.append(("421000", "RETENUES SUR AVANCES / PRÊTS AU PERSONNEL", 0, total_pret))
+        rows.append(("431300", "CNSS — PART SALARIALE", 0, total_cnss_sal))
+        rows.append(("447210", "IUTS RETENU À LA SOURCE", 0, total_iuts))
+
+        sous_total_1_debit = sum_sal_base + sum_primes + sum_hs + sum_caisse + sum_log + sum_fct + sum_trp
+        sous_total_1_credit = total_net + total_ro + total_pret + total_cnss_sal + total_iuts
+        rows.append(("", "SOUS-TOTAL 1 (charges de personnel)", sous_total_1_debit, sous_total_1_credit))
+
+        # --- Charges patronales
+        total_cnss_pat = s("cnss_patronale")
+        total_tpa = s("tpa_patronale")
+        rows.append(("664100", "CHARGES SOCIALES — CNSS PATRONALE", total_cnss_pat, 0))
+        rows.append(("431300", "CNSS — PART PATRONALE (à reverser)", 0, total_cnss_pat))
+        rows.append(("664200", "TAXE PATRONALE D'APPRENTISSAGE (TPA)", total_tpa, 0))
+        rows.append(("447230", "TPA À REVERSER", 0, total_tpa))
+
+        sous_total_2 = total_cnss_pat + total_tpa
+        rows.append(("", "SOUS-TOTAL 2 (charges patronales)", sous_total_2, sous_total_2))
+
+        grand_total_debit = sous_total_1_debit + sous_total_2
+        grand_total_credit = sous_total_1_credit + sous_total_2
+        rows.append(("", "GRAND TOTAL", grand_total_debit, grand_total_credit))
+
+        return rows
+
+    def generate(self):
+        results = self.payroll_tab.last_results
+        if not results:
+            self.payroll_tab.calculate()
+            results = self.payroll_tab.last_results
+        if not results:
+            messagebox.showinfo("Info", "Aucun employé saisi pour le moment.")
+            return
+
+        rows = self._build_rows(results)
+        self.last_rows = rows
+        self.tree.delete(*self.tree.get_children())
+        for compte, libelle, debit, credit in rows:
+            bold = libelle.startswith(("SOUS-TOTAL", "GRAND TOTAL"))
+            values = (compte, libelle, f"{debit:,.0f}".replace(",", " ") if debit else "",
+                      f"{credit:,.0f}".replace(",", " ") if credit else "")
+            iid = self.tree.insert("", "end", values=values, tags=("total",) if bold else ())
+        self.tree.tag_configure("total", font=("Segoe UI", 9, "bold"), background="#eef2f7")
+
+        total_debit = rows[-1][2]
+        total_credit = rows[-1][3]
+        equilibre = "✓ Écriture équilibrée" if abs(total_debit - total_credit) < 1 else "⚠ ÉCRITURE DÉSÉQUILIBRÉE"
+        self.totals_label.config(text=f"{equilibre}  —  Total Débit : {total_debit:,.0f}  |  "
+                                       f"Total Crédit : {total_credit:,.0f}  FCFA".replace(",", " "))
+
+    def export_excel(self):
+        if not self.last_rows:
+            self.generate()
+        if not self.last_rows:
+            return
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+        except ImportError:
+            messagebox.showerror("Module manquant",
+                                  "Le module 'openpyxl' n'est pas installé.\n"
+                                  "Installez-le avec : pip install openpyxl")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Classeur Excel", "*.xlsx")],
+            initialfile="Ecritures_comptables_paie.xlsx",
+        )
+        if not path:
+            return
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Écritures comptables"
+
+        ws.merge_cells("A1:D1")
+        ws["A1"] = "ÉCRITURE COMPTABLE DE PAIE"
+        ws["A1"].font = Font(size=14, bold=True)
+
+        ws.append([])
+        ws.append(["N° Compte", "Libellé", "Débit", "Crédit"])
+        for cell in ws[ws.max_row]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1F4E78")
+            cell.alignment = Alignment(horizontal="center")
+
+        for compte, libelle, debit, credit in self.last_rows:
+            ws.append([compte, libelle, debit or None, credit or None])
+
+        for col in ws.columns:
+            length = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+            ws.column_dimensions[col[0].column_letter].width = max(14, length + 2)
 
         notice_row = ws.max_row + 2
         ws.cell(row=notice_row, column=1, value=PAID_SOFTWARE_NOTICE).font = Font(italic=True, color="B8860B")
