@@ -66,6 +66,7 @@ class Employee:
     numero: int = 0
     nom_prenoms: str = ""
     classification: str = "AUTRE"     # "CADRE" ou "AUTRE"
+    periode: str = ""                 # période de paie, format "AAAA-MM" (ex: "2026-08")
     salaire_base: float = 0.0
     prime_anciennete: float = 0.0
     heures_sup: float = 0.0
@@ -77,7 +78,7 @@ class Employee:
     indemnite_transport: float = 0.0
     personnes_a_charge: int = 0
     retenue_pret: float = 0.0
-    date_saisie: str = ""
+    date_saisie: str = ""             # date d'enregistrement dans le logiciel (audit), format ISO
 
     def to_dict(self):
         return asdict(self)
