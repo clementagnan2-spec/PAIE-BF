@@ -22,10 +22,49 @@ import storage
 from payroll_engine import Employee, compute_payslip, DEFAULT_PARAMS
 
 APP_TITLE = "Paie Burkina — Traitement des salaires mensuels"
-PAID_SOFTWARE_NOTICE = "Ce logiciel de paie est payant : consultanter280@gmmail.com"
+PAID_SOFTWARE_NOTICE = "Ce logiciel de paie est payant : consultanter280@gmail.com"
 
 MOIS_FR = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet",
            "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+
+
+def current_period_key():
+    today = datetime.date.today()
+    return f"{today.year:04d}-{today.month:02d}"
+
+
+def normalize_period(text, default=None):
+    """Accepte 'MM/AAAA', 'AAAA-MM', 'MM-AAAA', 'AAAA/MM', ou une date Excel,
+    et renvoie 'AAAA-MM'. Renvoie `default` (ou la période en cours) si le
+    texte est vide/invalide."""
+    default = default or current_period_key()
+    if isinstance(text, (datetime.date, datetime.datetime)):
+        return f"{text.year:04d}-{text.month:02d}"
+    text = (text or "").strip()
+    if not text:
+        return default
+    parts = text.replace("/", "-").split("-")
+    if len(parts) != 2:
+        return default
+    a, b = parts
+    try:
+        if len(a) == 4:
+            year, month = int(a), int(b)
+        else:
+            month, year = int(a), int(b)
+        if not (1 <= month <= 12):
+            return default
+        return f"{year:04d}-{month:02d}"
+    except ValueError:
+        return default
+
+
+def format_period(period_key):
+    try:
+        year, month = period_key.split("-")
+        return f"{MOIS_FR[int(month) - 1]} {year}"
+    except Exception:
+        return period_key or ""
 
 
 class App(tk.Tk):
@@ -184,6 +223,7 @@ class MainScreen(ttk.Frame):
 COLUMNS = [
     ("numero", "N°", 40),
     ("nom_prenoms", "Nom & Prénoms", 160),
+    ("periode_aff", "Période de paie", 110),
     ("classification", "Classif.", 70),
     ("salaire_base", "Sal. Base", 85),
     ("prime_anciennete", "Prime anc.", 80),
@@ -196,6 +236,7 @@ COLUMNS = [
     ("indemnite_transport", "Indem. Trprt", 90),
     ("personnes_a_charge", "Pers. charge", 85),
     ("retenue_pret", "Retenue prêt", 90),
+    ("date_saisie", "Date de saisie", 100),
 ]
 
 
@@ -252,6 +293,7 @@ class EmployeesTab(ttk.Frame):
 
         fields = [
             ("nom_prenoms", "Nom & Prénoms", "text"),
+            ("periode", "Période de paie (MM/AAAA)", "period"),
             ("classification", "Classification", "combo"),
             ("salaire_base", "Salaire de base", "num"),
             ("prime_anciennete", "Prime d'ancienneté", "num"),
@@ -272,6 +314,10 @@ class EmployeesTab(ttk.Frame):
                 w = ttk.Combobox(form, textvariable=var, values=["CADRE", "AUTRE"],
                                   state="readonly", width=18)
                 var.set("AUTRE")
+            elif kind == "period":
+                w = ttk.Entry(form, textvariable=var, width=20)
+                today = datetime.date.today()
+                var.set(f"{today.month:02d}/{today.year:04d}")
             else:
                 w = ttk.Entry(form, textvariable=var, width=20)
                 if kind == "num":
@@ -287,6 +333,7 @@ class EmployeesTab(ttk.Frame):
         ttk.Button(right, text="Vider le formulaire", command=self.clear_form).pack()
 
         self.selected_numero = None
+        self.selected_date_saisie = None
         self.refresh_tree()
 
     # ------------------------------------------------------------------
@@ -296,7 +343,12 @@ class EmployeesTab(ttk.Frame):
     def refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
         for emp in self.get_employees():
-            values = [emp.get(k, "") for k, _, _ in COLUMNS]
+            values = []
+            for key, _, _ in COLUMNS:
+                if key == "periode_aff":
+                    values.append(format_period(emp.get("periode", "")))
+                else:
+                    values.append(emp.get(key, ""))
             self.tree.insert("", "end", iid=str(emp["numero"]), values=values)
 
     def _read_form(self):
@@ -306,6 +358,7 @@ class EmployeesTab(ttk.Frame):
                 numero=self.selected_numero or self.app.config_data["next_numero"],
                 nom_prenoms=v["nom_prenoms"].get().strip(),
                 classification=v["classification"].get() or "AUTRE",
+                periode=normalize_period(v["periode"].get()),
                 salaire_base=float(v["salaire_base"].get() or 0),
                 prime_anciennete=float(v["prime_anciennete"].get() or 0),
                 heures_sup=float(v["heures_sup"].get() or 0),
@@ -317,7 +370,7 @@ class EmployeesTab(ttk.Frame):
                 indemnite_transport=float(v["indemnite_transport"].get() or 0),
                 personnes_a_charge=int(float(v["personnes_a_charge"].get() or 0)),
                 retenue_pret=float(v["retenue_pret"].get() or 0),
-                date_saisie=datetime.date.today().isoformat(),
+                date_saisie=self.selected_date_saisie or datetime.date.today().isoformat(),
             )
         except ValueError:
             messagebox.showerror("Erreur de saisie", "Merci de vérifier les valeurs numériques saisies.")
@@ -367,8 +420,17 @@ class EmployeesTab(ttk.Frame):
 
     def clear_form(self):
         self.selected_numero = None
+        self.selected_date_saisie = None
         for key, var in self.form_vars.items():
-            var.set("AUTRE" if key == "classification" else ("0" if key != "nom_prenoms" else ""))
+            if key == "classification":
+                var.set("AUTRE")
+            elif key == "periode":
+                today = datetime.date.today()
+                var.set(f"{today.month:02d}/{today.year:04d}")
+            elif key == "nom_prenoms":
+                var.set("")
+            else:
+                var.set("0")
         self.tree.selection_remove(self.tree.selection())
 
     def on_select(self, event):
@@ -380,8 +442,22 @@ class EmployeesTab(ttk.Frame):
         emp = next((e for e in self.get_employees() if e["numero"] == numero), None)
         if not emp:
             return
+        self.selected_date_saisie = emp.get("date_saisie", "")
         for key, var in self.form_vars.items():
-            var.set(str(emp.get(key, "")))
+            if key == "periode":
+                var.set(self._periode_to_input(emp.get("periode", "")))
+            else:
+                var.set(str(emp.get(key, "")))
+
+    @staticmethod
+    def _periode_to_input(period_key):
+        """Convertit 'AAAA-MM' (stockage) vers 'MM/AAAA' (saisie)."""
+        try:
+            year, month = period_key.split("-")
+            return f"{int(month):02d}/{year}"
+        except Exception:
+            today = datetime.date.today()
+            return f"{today.month:02d}/{today.year:04d}"
 
     # ------------------------------------------------------------------
     # IMPORT EN MASSE (Excel / CSV)
@@ -393,6 +469,7 @@ class EmployeesTab(ttk.Frame):
     IMPORT_HEADER_MAP = {
         "nom & prenoms": "nom_prenoms", "nom et prenoms": "nom_prenoms",
         "nom & prénoms": "nom_prenoms", "nom prenoms": "nom_prenoms", "nom": "nom_prenoms",
+        "periode de paie": "periode", "période de paie": "periode", "periode": "periode", "mois": "periode",
         "classification": "classification", "classif": "classification", "classif.": "classification",
         "salaire de base": "salaire_base", "sal de base": "salaire_base", "sal. base": "salaire_base",
         "prime d'anciennete": "prime_anciennete", "prime anciennete": "prime_anciennete",
@@ -504,10 +581,12 @@ class EmployeesTab(ttk.Frame):
             classification = str(rec.get("classification", "AUTRE") or "AUTRE").strip().upper()
             if classification not in ("CADRE", "AUTRE"):
                 classification = "AUTRE"
+            periode = normalize_period(rec.get("periode", ""))
             emp = Employee(
                 numero=self.app.config_data["next_numero"],
                 nom_prenoms=nom,
                 classification=classification,
+                periode=periode,
                 salaire_base=to_float(rec.get("salaire_base")),
                 prime_anciennete=to_float(rec.get("prime_anciennete")),
                 heures_sup=to_float(rec.get("heures_sup")),
@@ -553,15 +632,17 @@ class EmployeesTab(ttk.Frame):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Employés"
-        headers = ["Nom & Prénoms", "Classification", "Salaire de base", "Prime d'ancienneté",
-                   "Heures supplémentaires", "Sursalaire", "Gratification", "Indemnité Caisse",
-                   "Indemnité Logement", "Indemnité Fonction", "Indemnité Transport",
+        headers = ["Nom & Prénoms", "Période de paie (MM/AAAA)", "Classification", "Salaire de base",
+                   "Prime d'ancienneté", "Heures supplémentaires", "Sursalaire", "Gratification",
+                   "Indemnité Caisse", "Indemnité Logement", "Indemnité Fonction", "Indemnité Transport",
                    "Personnes à charge", "Retenue prêt/avance"]
         ws.append(headers)
         for cell in ws[1]:
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill("solid", fgColor="1F4E78")
-        ws.append(["KABORE Awa", "AUTRE", 150000, 5000, 0, 0, 0, 10000, 30000, 15000, 20000, 2, 0])
+        today = datetime.date.today()
+        ws.append(["KABORE Awa", f"{today.month:02d}/{today.year:04d}", "AUTRE",
+                   150000, 5000, 0, 0, 0, 10000, 30000, 15000, 20000, 2, 0])
         for col in ws.columns:
             length = max((len(str(c.value)) for c in col if c.value is not None), default=12)
             ws.column_dimensions[col[0].column_letter].width = max(14, length + 2)
@@ -593,6 +674,10 @@ class PayrollTab(ttk.Frame):
                      width=12).pack(side="left", padx=6)
         self.annee_var = tk.StringVar(value=str(today.year))
         ttk.Entry(top, textvariable=self.annee_var, width=6).pack(side="left")
+
+        self.all_periods_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="Toutes périodes confondues",
+                         variable=self.all_periods_var).pack(side="left", padx=(10, 0))
 
         ttk.Button(top, text="Calculer la paie", command=self.calculate).pack(side="left", padx=16)
         ttk.Button(top, text="Exporter vers Excel", command=self.export_excel).pack(side="left")
@@ -627,9 +712,20 @@ class PayrollTab(ttk.Frame):
 
         self.last_results = []
 
+    def selected_period_key(self):
+        month = MOIS_FR.index(self.mois_var.get()) + 1
+        try:
+            year = int(self.annee_var.get())
+        except ValueError:
+            year = datetime.date.today().year
+        return f"{year:04d}-{month:02d}"
+
     def calculate(self):
         params = self.app.config_data["params"]
         employees = self.app.config_data["employees"]
+        if not self.all_periods_var.get():
+            period_key = self.selected_period_key()
+            employees = [e for e in employees if e.get("periode") == period_key]
         self.tree.delete(*self.tree.get_children())
         results = []
         total_net = total_cnss = total_iuts = total_cout = total_ro = 0.0
@@ -750,10 +846,22 @@ class AccountingTab(ttk.Frame):
 
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=6)
-        ttk.Label(top, text="Écritures comptables de la paie (partie double)",
+        ttk.Label(top, text="Écritures comptables de la paie :",
                   font=("Segoe UI", 11, "bold")).pack(side="left")
-        ttk.Button(top, text="Générer à partir de l'état de paie",
-                   command=self.generate).pack(side="left", padx=16)
+
+        today = datetime.date.today()
+        ttk.Label(top, text="  Période :").pack(side="left")
+        self.mois_var = tk.StringVar(value=MOIS_FR[today.month - 1])
+        ttk.Combobox(top, textvariable=self.mois_var, values=MOIS_FR, state="readonly",
+                     width=12).pack(side="left", padx=4)
+        self.annee_var = tk.StringVar(value=str(today.year))
+        ttk.Entry(top, textvariable=self.annee_var, width=6).pack(side="left")
+
+        self.all_periods_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="Toutes périodes confondues",
+                         variable=self.all_periods_var).pack(side="left", padx=(10, 0))
+
+        ttk.Button(top, text="Générer", command=self.generate).pack(side="left", padx=16)
         ttk.Button(top, text="Exporter vers Excel", command=self.export_excel).pack(side="left")
 
         cols = ["compte", "libelle", "debit", "credit"]
@@ -777,13 +885,26 @@ class AccountingTab(ttk.Frame):
 
         self.last_rows = []
 
-    def _build_rows(self, results):
+    def selected_period_key(self):
+        month = MOIS_FR.index(self.mois_var.get()) + 1
+        try:
+            year = int(self.annee_var.get())
+        except ValueError:
+            year = datetime.date.today().year
+        return f"{year:04d}-{month:02d}"
+
+    def _filtered_employees(self):
+        raw = self.app.config_data["employees"]
+        if not self.all_periods_var.get():
+            period_key = self.selected_period_key()
+            raw = [e for e in raw if e.get("periode") == period_key]
+        return [Employee(**e) for e in raw]
+
+    def _build_rows(self, employees, results):
         def s(key):
             return sum(r[key] for r in results)
 
         rows = []
-        # sommes brutes par nature (issues directement des fiches employés, pas des résultats calculés)
-        employees = [Employee(**e) for e in self.app.config_data["employees"]]
         sum_sal_base = sum(e.salaire_base for e in employees)
         sum_primes = sum(e.prime_anciennete + e.gratification for e in employees)
         sum_hs = sum(e.heures_sup + e.sursalaire for e in employees)
@@ -834,15 +955,18 @@ class AccountingTab(ttk.Frame):
         return rows
 
     def generate(self):
-        results = self.payroll_tab.last_results
-        if not results:
-            self.payroll_tab.calculate()
-            results = self.payroll_tab.last_results
-        if not results:
-            messagebox.showinfo("Info", "Aucun employé saisi pour le moment.")
+        params = self.app.config_data["params"]
+        employees = self._filtered_employees()
+        if not employees:
+            period_txt = "toutes périodes" if self.all_periods_var.get() else format_period(self.selected_period_key())
+            messagebox.showinfo("Info", f"Aucun employé pour la période sélectionnée ({period_txt}).")
+            self.tree.delete(*self.tree.get_children())
+            self.last_rows = []
+            self.totals_label.config(text="")
             return
+        results = [compute_payslip(emp, params) for emp in employees]
 
-        rows = self._build_rows(results)
+        rows = self._build_rows(employees, results)
         self.last_rows = rows
         self.tree.delete(*self.tree.get_children())
         for compte, libelle, debit, credit in rows:
