@@ -551,23 +551,59 @@ class EmployeesTab(ttk.Frame):
 
         if ext in ("xlsx", "xlsm"):
             import openpyxl
-            wb = openpyxl.load_workbook(path, data_only=True)
-            ws = wb.active
-            all_rows = list(ws.iter_rows(values_only=True))
+            try:
+                wb = openpyxl.load_workbook(path, data_only=True)
+            except Exception as exc:
+                raise ValueError(
+                    "Impossible d'ouvrir ce fichier Excel.\n"
+                    "Vérifiez qu'il est bien au format .xlsx (Excel 2007 ou plus récent — "
+                    "pas l'ancien .xls), et qu'il n'est pas ouvert dans Excel en ce moment.\n\n"
+                    f"Détail : {exc}")
+
+            # On cherche la feuille qui contient les bons en-têtes, plutôt que
+            # de se fier uniquement à la feuille "active" (qui peut être une
+            # autre feuille selon la dernière feuille consultée dans Excel).
+            best_rows, best_score = None, -1
+            for ws in wb.worksheets:
+                rows = list(ws.iter_rows(values_only=True))
+                if not rows:
+                    continue
+                header = rows[0]
+                score = sum(1 for h in header if self._normalize_header(h) in header_map)
+                if score > best_score:
+                    best_rows, best_score = rows, score
+            all_rows = best_rows or []
+        elif ext == "xls":
+            raise ValueError(
+                "Ce fichier est au format Excel 97-2003 (.xls), pas pris en charge.\n"
+                "Ouvrez-le dans Excel puis faites « Fichier > Enregistrer sous » "
+                "et choisissez le type « Classeur Excel (*.xlsx) », puis réimportez ce nouveau fichier.")
         elif ext == "csv":
             import csv
-            with open(path, "r", encoding="utf-8-sig", newline="") as f:
-                sample = f.read(4096)
-                f.seek(0)
+            # Les CSV exportés par Excel en français sont souvent encodés en
+            # Windows-1252 (cp1252) ou Latin-1, pas en UTF-8 : on essaie
+            # plusieurs encodages avant d'abandonner.
+            raw_bytes = open(path, "rb").read()
+            text = None
+            for encoding in ("utf-8-sig", "cp1252", "latin-1"):
                 try:
-                    dialect = csv.Sniffer().sniff(sample, delimiters=";,")
-                except csv.Error:
-                    dialect = csv.excel
-                    dialect.delimiter = ";" if sample.count(";") > sample.count(",") else ","
-                reader = csv.reader(f, dialect)
-                all_rows = [tuple(row) for row in reader]
+                    text = raw_bytes.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            if text is None:
+                raise ValueError("Impossible de lire l'encodage de ce fichier CSV.")
+
+            sample = text[:4096]
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=";,")
+            except csv.Error:
+                dialect = csv.excel
+                dialect.delimiter = ";" if sample.count(";") > sample.count(",") else ","
+            reader = csv.reader(text.splitlines(), dialect)
+            all_rows = [tuple(row) for row in reader]
         else:
-            raise ValueError("Format non pris en charge (utilisez .xlsx ou .csv).")
+            raise ValueError("Format non pris en charge. Utilisez un fichier .xlsx (Excel) ou .csv.")
 
         if not all_rows:
             return []
@@ -617,7 +653,12 @@ class EmployeesTab(ttk.Frame):
             if v is None or v == "":
                 return 0.0
             if isinstance(v, str):
-                v = v.replace(" ", "").replace(",", ".")
+                v = v.strip()
+                # tolère les espaces (séparateur de milliers), le symbole
+                # FCFA/CFA, et la virgule décimale française
+                v = (v.replace("\xa0", "").replace(" ", "")
+                      .replace("FCFA", "").replace("CFA", "").replace("F", "")
+                      .replace(",", "."))
             try:
                 return float(v)
             except (TypeError, ValueError):
