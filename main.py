@@ -7,7 +7,7 @@ Application de traitement de la paie mensuelle -- Burkina Faso.
 Deux niveaux d'accès :
   - Administrateur : mot de passe fixe (modifiable), accès aux paramètres
     de paie et au mot de passe Utilisateur.
-  - Utilisateur : mot de passe qui change automatiquement chaque mois,
+  - Utilisateur : mot de passe qui change automatiquement tous les 3 mois,
     accès à la saisie des employés et au calcul de la paie.
 
 Lancer avec :  python main.py
@@ -177,8 +177,8 @@ class LoginScreen(ttk.Frame):
 
         info = ttk.Label(
             center,
-            text="Le mot de passe Utilisateur change automatiquement chaque\n"
-                 "mois. Contactez l'administrateur pour l'obtenir.\n"
+            text="Le mot de passe Utilisateur change automatiquement tous\n"
+                 "les 3 mois. Contactez l'administrateur pour l'obtenir.\n"
                  "Clavier AZERTY : pensez à Maj (Shift) pour taper les chiffres.",
             justify="center", foreground="#555")
         info.pack(pady=(6, 0))
@@ -211,7 +211,7 @@ class LoginScreen(ttk.Frame):
             else:
                 messagebox.showerror("Connexion refusée",
                                       "Mot de passe utilisateur incorrect ou expiré "
-                                      "(il change chaque mois).")
+                                      "(il change tous les 3 mois).")
 
 
 # ==========================================================================
@@ -1488,25 +1488,25 @@ class SecurityTab(ttk.Frame):
         frame = ttk.Frame(self)
         frame.pack(padx=20, pady=20, anchor="nw")
 
-        ttk.Label(frame, text="Mot de passe Utilisateur du mois en cours",
+        ttk.Label(frame, text="Mot de passe Utilisateur du trimestre en cours",
                   font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         period = auth.current_period()
         current_pwd = auth.get_effective_user_password(app.config_data)
-        ttk.Label(frame, text=f"Mois : {auth.period_label(period)}").grid(row=1, column=0, sticky="w")
+        ttk.Label(frame, text=f"Trimestre : {auth.period_label(period)}").grid(row=1, column=0, sticky="w")
         self.pwd_display = tk.StringVar(value=current_pwd)
         entry = ttk.Entry(frame, textvariable=self.pwd_display, width=20, state="readonly",
                            font=("Consolas", 12, "bold"))
         entry.grid(row=2, column=0, sticky="w", pady=6)
-        ttk.Label(frame, text="(généré automatiquement — change chaque 1er du mois)",
+        ttk.Label(frame, text="(généré automatiquement — change tous les 3 mois : Janv., Avr., Juil., Oct.)",
                   foreground="#666").grid(row=3, column=0, columnspan=2, sticky="w")
         ttk.Label(frame, text="Propre à cette installation : communiquez ce code à l'utilisateur\n"
-                               "de cet ordinateur à chaque changement de mois (téléphone, SMS...).",
+                               "de cet ordinateur à chaque changement de trimestre (téléphone, SMS...).",
                   foreground="#666", justify="left").grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         ttk.Separator(frame).grid(row=5, column=0, columnspan=2, sticky="ew", pady=16)
 
-        ttk.Label(frame, text="Forcer un mot de passe Utilisateur pour ce mois-ci",
+        ttk.Label(frame, text="Forcer un mot de passe Utilisateur pour ce trimestre",
                   font=("Segoe UI", 11, "bold")).grid(row=6, column=0, columnspan=2, sticky="w")
         self.override_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.override_var, width=20).grid(row=7, column=0, sticky="w", pady=6)
