@@ -57,7 +57,15 @@ def _default_config() -> dict:
         # qu'un mot de passe Utilisateur valable sur une installation
         # fonctionne aussi sur une autre (anti-partage entre postes/clients).
         "secret_key": auth.new_secret_key(),
-        "user_password_overrides": {},   # {"2026-08": "MOTDEPASSEFORCE"}
+        # Mot de passe Utilisateur par défaut CONNU (comme admin123 pour
+        # l'admin), valable uniquement pour la période de validité en cours
+        # au moment de l'installation. Pratique pour l'installation à
+        # distance : pas besoin de se reconnecter en admin juste pour lire
+        # le premier mot de passe. Dès que cette période se termine, plus
+        # aucun mot de passe forcé n'existe pour la nouvelle période : le
+        # logiciel repasse automatiquement sur la génération habituelle
+        # (dérivée de la clé secrète ci-dessus).
+        "user_password_overrides": {auth.current_period(): "user123"},
         "params": copy.deepcopy(DEFAULT_PARAMS),
         "employees": [],
         "next_numero": 1,
