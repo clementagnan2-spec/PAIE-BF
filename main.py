@@ -161,17 +161,25 @@ class LoginScreen(ttk.Frame):
 
         ttk.Label(form, text="Mot de passe :").grid(row=1, column=0, sticky="e", padx=6, pady=6)
         self.pwd_var = tk.StringVar()
+        self.show_pwd_var = tk.BooleanVar(value=False)
         pwd_entry = ttk.Entry(form, textvariable=self.pwd_var, show="•", width=23)
         pwd_entry.grid(row=1, column=1, sticky="w", padx=6, pady=6)
         pwd_entry.bind("<Return>", lambda e: self.try_login())
         pwd_entry.focus_set()
+
+        def toggle_show():
+            pwd_entry.config(show="" if self.show_pwd_var.get() else "•")
+
+        ttk.Checkbutton(form, text="Afficher le mot de passe", variable=self.show_pwd_var,
+                         command=toggle_show).grid(row=2, column=1, sticky="w", padx=6)
 
         ttk.Button(center, text="Se connecter", command=self.try_login).pack(pady=16)
 
         info = ttk.Label(
             center,
             text="Le mot de passe Utilisateur change automatiquement tous\n"
-                 "les 3 mois. Contactez l'administrateur pour l'obtenir.",
+                 "les 3 mois. Contactez l'administrateur pour l'obtenir.\n"
+                 "Clavier AZERTY : pensez à Maj (Shift) pour taper les chiffres.",
             justify="center", foreground="#555")
         info.pack(pady=(6, 0))
 
@@ -190,7 +198,11 @@ class LoginScreen(ttk.Frame):
                 self.app.role = "admin"
                 self.app.show_main()
             else:
-                messagebox.showerror("Connexion refusée", "Mot de passe administrateur incorrect.")
+                messagebox.showerror("Connexion refusée",
+                                      "Mot de passe administrateur incorrect.\n\n"
+                                      "Astuce : cochez « Afficher le mot de passe » pour vérifier "
+                                      "exactement ce qui est tapé (attention aux claviers AZERTY "
+                                      "pour les chiffres, qui nécessitent la touche Maj).")
         else:
             expected = auth.get_effective_user_password(cfg)
             if pwd == expected:
@@ -1039,7 +1051,25 @@ class PayrollTab(ttk.Frame):
         c.drawString(x_left, y, "GAINS")
         y -= 6 * mm
 
-        y = row("Rémunération totale (base + primes + indemnités)", r["remuneration_totale"], y, bold=True)
+        gain_lines = [
+            ("Salaire de base", r["salaire_base"]),
+            ("Prime d'ancienneté", r["prime_anciennete"]),
+            ("Heures supplémentaires", r["heures_sup"]),
+            ("Sursalaire", r["sursalaire"]),
+            ("Gratification", r["gratification"]),
+            ("Indemnité de caisse", r["indemnite_caisse"]),
+            ("Indemnité de logement", r["indemnite_logement"]),
+            ("Indemnité de fonction", r["indemnite_fonction"]),
+            ("Indemnité de transport", r["indemnite_transport"]),
+        ]
+        for label, value in gain_lines:
+            if value:  # on n'affiche pas les lignes à 0, pour un bulletin plus lisible
+                y = row(label, value, y, indent=2 * mm)
+        y -= 1 * mm
+        c.setLineWidth(0.4)
+        c.line(x_left + 2 * mm, y, x_right, y)
+        y -= 5.5 * mm
+        y = row("Rémunération totale", r["remuneration_totale"], y, bold=True)
         y -= 3 * mm
 
         c.setFont("Helvetica-Bold", 10)

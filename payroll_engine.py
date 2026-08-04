@@ -216,6 +216,17 @@ def compute_payslip(emp: Employee, params: dict) -> dict:
         "numero": emp.numero,
         "nom_prenoms": emp.nom_prenoms,
         "classification": emp.classification,
+        # Détail des éléments de gain (utile pour l'affichage détaillé des
+        # bulletins de paie)
+        "salaire_base": F,
+        "prime_anciennete": G,
+        "heures_sup": H,
+        "sursalaire": I,
+        "gratification": J,
+        "indemnite_caisse": K,
+        "indemnite_logement": L,
+        "indemnite_fonction": M,
+        "indemnite_transport": N,
         "remuneration_totale": O,
         "cnss_salariale": P,
         "plafond_fiscal": Q,
