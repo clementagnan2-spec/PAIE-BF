@@ -5,19 +5,18 @@ auth.py
 Gestion des deux niveaux d'accès :
   - Administrateur : mot de passe fixe, choisi/changé par l'admin.
       -> accès aux Paramètres de paie ET au mot de passe Utilisateur en cours.
-  - Utilisateur : mot de passe qui change automatiquement tous les 3 mois
-    (par trimestre civil : Jan-Mars, Avr-Juin, Juil-Sept, Oct-Déc).
+  - Utilisateur : mot de passe qui change automatiquement chaque mois.
       -> accès à la saisie et au calcul de la paie uniquement.
 
 Le mot de passe Utilisateur est dérivé d'une clé secrète (stockée dans le
-fichier de données local, jamais dans le code) + le trimestre en cours, via
+fichier de données local, jamais dans le code) + le mois en cours, via
 HMAC-SHA256. Il est donc imprévisible sans connaître la clé secrète, mais
-reproductible automatiquement à chaque changement de trimestre -- pas besoin
+reproductible automatiquement à chaque changement de mois -- pas besoin
 d'une connexion Internet ni d'une action manuelle pour qu'il change.
 
 L'administrateur peut à tout moment :
-  - consulter le mot de passe Utilisateur du trimestre en cours (onglet Sécurité)
-  - forcer un mot de passe Utilisateur personnalisé pour le trimestre en cours
+  - consulter le mot de passe Utilisateur du mois en cours (onglet Sécurité)
+  - forcer un mot de passe Utilisateur personnalisé pour le mois en cours
   - régénérer/relancer la clé secrète (ce qui change tous les mots de passe
     futurs, mais PAS ceux déjà communiqués et notés ailleurs)
 """
@@ -48,29 +47,27 @@ def verify_password(password: str, salt_hex: str, hash_hex: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Mot de passe Utilisateur, régénéré automatiquement chaque trimestre
+# Mot de passe Utilisateur, régénéré automatiquement chaque mois
 # ---------------------------------------------------------------------------
 
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # sans caractères ambigus (0/O, 1/I)
 
+MOIS_LABELS = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet",
+               "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+
 
 def _period_key(dt: Optional[datetime.date] = None) -> str:
-    """Clé de trimestre civil, ex: '2026-T3' pour juillet-août-septembre 2026."""
+    """Clé de mois civil, ex: '2026-08' pour août 2026."""
     dt = dt or datetime.date.today()
-    quarter = (dt.month - 1) // 3 + 1
-    return f"{dt.year:04d}-T{quarter}"
+    return f"{dt.year:04d}-{dt.month:02d}"
 
 
 def period_label(period: Optional[str] = None) -> str:
-    """Libellé lisible du trimestre, ex: '2026-T3' -> 'Juil.–Sept. 2026'."""
+    """Libellé lisible du mois, ex: '2026-08' -> 'Août 2026'."""
     period = period or _period_key()
     try:
-        year, tpart = period.split("-T")
-        quarter = int(tpart)
-        mois_par_trimestre = {
-            1: "Janv.–Mars", 2: "Avr.–Juin", 3: "Juil.–Sept.", 4: "Oct.–Déc.",
-        }
-        return f"{mois_par_trimestre[quarter]} {year}"
+        year, month = period.split("-")
+        return f"{MOIS_LABELS[int(month) - 1]} {year}"
     except Exception:
         return period
 
@@ -78,7 +75,7 @@ def period_label(period: Optional[str] = None) -> str:
 def generate_period_password(secret_key_hex: str, period: Optional[str] = None,
                               length: int = 8) -> str:
     """Dérive un mot de passe lisible à partir de la clé secrète + la période
-    (ex: '2026-T3'). Déterministe : même clé + même trimestre => même mot de passe."""
+    (ex: '2026-08'). Déterministe : même clé + même mois => même mot de passe."""
     period = period or _period_key()
     secret = bytes.fromhex(secret_key_hex)
     digest = hmac.new(secret, period.encode("utf-8"), hashlib.sha256).digest()
@@ -110,8 +107,8 @@ def current_period() -> str:
 
 
 def get_effective_user_password(config: dict) -> str:
-    """Retourne le mot de passe Utilisateur qui s'applique CE TRIMESTRE :
-    - un mot de passe forcé par l'admin pour ce trimestre précis s'il existe,
+    """Retourne le mot de passe Utilisateur qui s'applique CE MOIS-CI :
+    - un mot de passe forcé par l'admin pour ce mois précis s'il existe,
     - sinon le mot de passe dérivé automatiquement de la clé secrète."""
     period = current_period()
     override = config.get("user_password_overrides", {}).get(period)
