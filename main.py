@@ -7,7 +7,7 @@ Application de traitement de la paie mensuelle -- Burkina Faso.
 Deux niveaux d'accès :
   - Administrateur : mot de passe fixe (modifiable), accès aux paramètres
     de paie et au mot de passe Utilisateur.
-  - Utilisateur : mot de passe qui change automatiquement chaque mois,
+  - Utilisateur : mot de passe qui change automatiquement tous les 3 mois,
     accès à la saisie des employés et au calcul de la paie.
 
 Lancer avec :  python main.py
@@ -170,8 +170,8 @@ class LoginScreen(ttk.Frame):
 
         info = ttk.Label(
             center,
-            text="Le mot de passe Utilisateur change automatiquement chaque\n"
-                 "début de mois. Contactez l'administrateur pour l'obtenir.",
+            text="Le mot de passe Utilisateur change automatiquement tous\n"
+                 "les 3 mois. Contactez l'administrateur pour l'obtenir.",
             justify="center", foreground="#555")
         info.pack(pady=(6, 0))
 
@@ -199,7 +199,7 @@ class LoginScreen(ttk.Frame):
             else:
                 messagebox.showerror("Connexion refusée",
                                       "Mot de passe utilisateur incorrect ou expiré "
-                                      "(il change chaque début de mois).")
+                                      "(il change tous les 3 mois).")
 
 
 # ==========================================================================
@@ -772,7 +772,9 @@ class PayrollTab(ttk.Frame):
                          variable=self.all_periods_var).pack(side="left", padx=(10, 0))
 
         ttk.Button(top, text="Calculer la paie", command=self.calculate).pack(side="left", padx=16)
-        ttk.Button(top, text="Exporter vers Excel", command=self.export_excel).pack(side="left")
+        ttk.Button(top, text="Exporter vers Excel", command=self.export_excel).pack(side="left", padx=(0, 6))
+        ttk.Button(top, text="Bulletin PDF (sélection)", command=self.export_selected_payslip).pack(side="left", padx=(0, 6))
+        ttk.Button(top, text="Tous les bulletins (PDF)", command=self.export_all_payslips).pack(side="left")
 
         result_cols = ["numero", "nom_prenoms", "remuneration_totale", "cnss_salariale",
                         "salaire_brut", "base_imposable", "iuts_net", "salaire_net",
@@ -902,10 +904,184 @@ class PayrollTab(ttk.Frame):
         wb.save(path)
         messagebox.showinfo("Export réussi", f"Fichier exporté :\n{path}")
 
+    # ------------------------------------------------------------------
+    # BULLETINS DE PAIE (PDF), avec en-tête et pied de page paramétrables
+    # ------------------------------------------------------------------
 
-# ==========================================================================
-# ONGLET ÉCRITURES COMPTABLES
-# ==========================================================================
+    def _period_display(self):
+        return f"{self.mois_var.get()} {self.annee_var.get()}"
+
+    def export_selected_payslip(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showinfo("Info", "Sélectionnez d'abord un employé dans le tableau ci-dessus "
+                                         "(après avoir cliqué sur « Calculer la paie »).")
+            return
+        if not self.last_results:
+            messagebox.showinfo("Info", "Cliquez d'abord sur « Calculer la paie ».")
+            return
+        values = self.tree.item(sel[0], "values")
+        numero = int(values[0])
+        result = next((r for r in self.last_results if r["numero"] == numero), None)
+        if result is None:
+            messagebox.showerror("Erreur", "Employé introuvable dans les résultats calculés.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF", "*.pdf")],
+            initialfile=f"Bulletin_{result['nom_prenoms'].replace(' ', '_')}_{self.mois_var.get()}_{self.annee_var.get()}.pdf",
+        )
+        if not path:
+            return
+        try:
+            self._generate_payslips_pdf([result], path)
+        except ImportError:
+            messagebox.showerror("Module manquant",
+                                  "Le module 'reportlab' n'est pas installé.\n"
+                                  "Installez-le avec : pip install reportlab")
+            return
+        messagebox.showinfo("Export réussi", f"Bulletin de paie généré :\n{path}")
+
+    def export_all_payslips(self):
+        if not self.last_results:
+            self.calculate()
+        if not self.last_results:
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF", "*.pdf")],
+            initialfile=f"Bulletins_de_paie_{self.mois_var.get()}_{self.annee_var.get()}.pdf",
+        )
+        if not path:
+            return
+        try:
+            self._generate_payslips_pdf(self.last_results, path)
+        except ImportError:
+            messagebox.showerror("Module manquant",
+                                  "Le module 'reportlab' n'est pas installé.\n"
+                                  "Installez-le avec : pip install reportlab")
+            return
+        messagebox.showinfo("Export réussi",
+                             f"{len(self.last_results)} bulletin(s) de paie généré(s) dans :\n{path}")
+
+    def _generate_payslips_pdf(self, results, path):
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import mm
+        from reportlab.pdfgen import canvas as pdf_canvas
+
+        entete = self.app.config_data.get("bulletin_entete", {}) or {}
+        pied = self.app.config_data.get("bulletin_pied_de_page", "") or ""
+        periode_txt = self._period_display()
+
+        width, height = A4
+        c = pdf_canvas.Canvas(path, pagesize=A4)
+
+        for result in results:
+            self._draw_payslip_page(c, width, height, mm, entete, pied, periode_txt, result)
+            c.showPage()
+
+        c.save()
+
+    def _draw_payslip_page(self, c, width, height, mm, entete, pied, periode_txt, r):
+        x_left = 18 * mm
+        x_right = width - 18 * mm
+        y = height - 18 * mm
+
+        # --- En-tête ---------------------------------------------------
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(x_left, y, entete.get("nom_entreprise") or "Mon Entreprise")
+        y -= 6 * mm
+        c.setFont("Helvetica", 9)
+        coords = [v for v in (entete.get("adresse"), entete.get("telephone"), entete.get("email")) if v]
+        if coords:
+            c.drawString(x_left, y, "  •  ".join(coords))
+            y -= 5 * mm
+        if entete.get("note_entete"):
+            c.setFont("Helvetica-Oblique", 8)
+            c.drawString(x_left, y, entete["note_entete"])
+            y -= 5 * mm
+
+        y -= 2 * mm
+        c.setLineWidth(1)
+        c.line(x_left, y, x_right, y)
+        y -= 8 * mm
+
+        c.setFont("Helvetica-Bold", 13)
+        c.drawCentredString(width / 2, y, f"BULLETIN DE PAIE — {periode_txt.upper()}")
+        y -= 10 * mm
+
+        # --- Bloc employé -----------------------------------------------
+        c.setFont("Helvetica", 10)
+        c.drawString(x_left, y, f"N° employé : {r['numero']}")
+        c.drawString(width / 2, y, f"Classification : {r['classification']}")
+        y -= 6 * mm
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(x_left, y, f"{r['nom_prenoms']}")
+        y -= 5 * mm
+        c.setFont("Helvetica", 10)
+        c.drawString(x_left, y, f"Personnes à charge : {r['personnes_a_charge']}")
+        y -= 9 * mm
+
+        def money(v):
+            return f"{v:,.0f}".replace(",", " ") + " FCFA"
+
+        def row(label, value, y, bold=False, indent=0):
+            c.setFont("Helvetica-Bold" if bold else "Helvetica", 10)
+            c.drawString(x_left + indent, y, label)
+            c.drawRightString(x_right, y, money(value))
+            return y - 5.5 * mm
+
+        c.setLineWidth(0.7)
+        c.line(x_left, y, x_right, y)
+        y -= 6 * mm
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(x_left, y, "GAINS")
+        y -= 6 * mm
+
+        y = row("Rémunération totale (base + primes + indemnités)", r["remuneration_totale"], y, bold=True)
+        y -= 3 * mm
+
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(x_left, y, "RETENUES")
+        y -= 6 * mm
+        y = row("CNSS (part salariale)", r["cnss_salariale"], y)
+        y = row("IUTS", r["iuts_net"], y)
+        y = row("Retenue obligatoire (1%)", r["retenue_obligatoire"], y)
+        y = row("Retenue prêt / avance", r["retenue_pret"], y)
+        y -= 3 * mm
+
+        c.setLineWidth(1)
+        c.line(x_left, y, x_right, y)
+        y -= 8 * mm
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(x_left, y, "NET À PAYER")
+        c.drawRightString(x_right, y, money(r["net_percu"]))
+        y -= 8 * mm
+        c.setLineWidth(1)
+        c.line(x_left, y, x_right, y)
+        y -= 10 * mm
+
+        c.setFont("Helvetica", 9)
+        c.drawString(x_left, y, f"Coût total employeur (charges patronales incluses) : {money(r['cout_total_employeur'])}")
+
+        # --- Pied de page -------------------------------------------------
+        bottom = 30 * mm
+        c.setLineWidth(0.5)
+        c.line(x_left, bottom + 14 * mm, x_right, bottom + 14 * mm)
+        c.setFont("Helvetica", 9)
+        c.drawString(x_left, bottom + 8 * mm, "Signature de l'employeur")
+        c.drawRightString(x_right, bottom + 8 * mm, "Signature de l'employé")
+
+        if pied:
+            c.setFont("Helvetica-Oblique", 7.5)
+            text_obj = c.beginText(x_left, bottom)
+            text_obj.setLeading(9)
+            for line in pied.split("\n"):
+                text_obj.textLine(line)
+            c.drawText(text_obj)
+
+
 # Génère l'écriture de paie en partie double (Débit / Crédit), à partir des
 # résultats calculés dans l'onglet "Bulletins / État de paie". Comptes basés
 # sur le plan comptable SYSCOHADA habituellement utilisé pour la paie.
@@ -1190,6 +1366,34 @@ class ParamsTab(ttk.Frame):
             row=row, column=0, columnspan=2, sticky="w", padx=8)
         row += 1
 
+        # --- En-tête / pied de page du bulletin de paie (PDF) ---------------
+        section("5. En-tête et pied de page du bulletin de paie (PDF)")
+        entete = self.app.config_data.get("bulletin_entete", {})
+        self.text_vars = {}
+
+        def text_field(label, key, value, width=40):
+            nonlocal row
+            ttk.Label(inner, text=label).grid(row=row, column=0, sticky="w", padx=8, pady=2)
+            var = tk.StringVar(value=str(value or ""))
+            ttk.Entry(inner, textvariable=var, width=width).grid(
+                row=row, column=1, sticky="w", padx=8, pady=2)
+            self.text_vars[key] = var
+            row += 1
+
+        text_field("Nom de l'entreprise (en-tête)", "nom_entreprise", entete.get("nom_entreprise", ""))
+        text_field("Adresse", "adresse", entete.get("adresse", ""))
+        text_field("Téléphone", "telephone", entete.get("telephone", ""))
+        text_field("Email", "email", entete.get("email", ""))
+        text_field("Note supplémentaire en en-tête (optionnel)", "note_entete", entete.get("note_entete", ""))
+
+        ttk.Label(inner, text="Texte du pied de page (mentions légales, signature...)").grid(
+            row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(8, 2))
+        row += 1
+        self.footer_text = tk.Text(inner, width=60, height=4, wrap="word")
+        self.footer_text.insert("1.0", self.app.config_data.get("bulletin_pied_de_page", ""))
+        self.footer_text.grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
+        row += 1
+
         ttk.Button(inner, text="Ouvrir le dossier des données",
                    command=self.open_data_folder).grid(row=row, column=0, pady=16, padx=8, sticky="w")
         ttk.Button(inner, text="Enregistrer les paramètres",
@@ -1214,6 +1418,17 @@ class ParamsTab(ttk.Frame):
         except ValueError:
             messagebox.showerror("Erreur", "Merci de vérifier les valeurs saisies (nombres attendus).")
             return
+
+        self.app.config_data["bulletin_entete"] = {
+            "nom_entreprise": self.text_vars["nom_entreprise"].get().strip(),
+            "adresse": self.text_vars["adresse"].get().strip(),
+            "telephone": self.text_vars["telephone"].get().strip(),
+            "email": self.text_vars["email"].get().strip(),
+            "note_entete": self.text_vars["note_entete"].get().strip(),
+        }
+        self.app.config_data["bulletin_pied_de_page"] = self.footer_text.get("1.0", "end").strip()
+        self.app.config_data["entreprise"] = self.text_vars["nom_entreprise"].get().strip() or "Mon Entreprise"
+
         storage.save(self.app.config_data)
         messagebox.showinfo("Enregistré", "Paramètres de paie mis à jour.")
 
@@ -1243,41 +1458,44 @@ class SecurityTab(ttk.Frame):
         frame = ttk.Frame(self)
         frame.pack(padx=20, pady=20, anchor="nw")
 
-        ttk.Label(frame, text="Mot de passe Utilisateur du mois en cours",
+        ttk.Label(frame, text="Mot de passe Utilisateur du trimestre en cours",
                   font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         period = auth.current_period()
         current_pwd = auth.get_effective_user_password(app.config_data)
-        ttk.Label(frame, text=f"Période : {period}").grid(row=1, column=0, sticky="w")
+        ttk.Label(frame, text=f"Trimestre : {auth.period_label(period)}").grid(row=1, column=0, sticky="w")
         self.pwd_display = tk.StringVar(value=current_pwd)
         entry = ttk.Entry(frame, textvariable=self.pwd_display, width=20, state="readonly",
                            font=("Consolas", 12, "bold"))
         entry.grid(row=2, column=0, sticky="w", pady=6)
-        ttk.Label(frame, text="(généré automatiquement — change chaque 1er du mois)",
-                  foreground="#666").grid(row=3, column=0, sticky="w")
+        ttk.Label(frame, text="(généré automatiquement — change tous les 3 mois : Janv., Avr., Juil., Oct.)",
+                  foreground="#666").grid(row=3, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, text="Propre à cette installation : communiquez ce code à l'utilisateur\n"
+                               "de cet ordinateur à chaque changement de trimestre (téléphone, SMS...).",
+                  foreground="#666", justify="left").grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
-        ttk.Separator(frame).grid(row=4, column=0, columnspan=2, sticky="ew", pady=16)
+        ttk.Separator(frame).grid(row=5, column=0, columnspan=2, sticky="ew", pady=16)
 
-        ttk.Label(frame, text="Forcer un mot de passe Utilisateur pour ce mois-ci",
-                  font=("Segoe UI", 11, "bold")).grid(row=5, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, text="Forcer un mot de passe Utilisateur pour ce trimestre",
+                  font=("Segoe UI", 11, "bold")).grid(row=6, column=0, columnspan=2, sticky="w")
         self.override_var = tk.StringVar()
-        ttk.Entry(frame, textvariable=self.override_var, width=20).grid(row=6, column=0, sticky="w", pady=6)
-        ttk.Button(frame, text="Appliquer", command=self.apply_override).grid(row=6, column=1, padx=8)
+        ttk.Entry(frame, textvariable=self.override_var, width=20).grid(row=7, column=0, sticky="w", pady=6)
+        ttk.Button(frame, text="Appliquer", command=self.apply_override).grid(row=7, column=1, padx=8)
         ttk.Button(frame, text="Revenir à la génération automatique",
-                   command=self.clear_override).grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 6))
+                   command=self.clear_override).grid(row=8, column=0, columnspan=2, sticky="w", pady=(0, 6))
 
-        ttk.Separator(frame).grid(row=8, column=0, columnspan=2, sticky="ew", pady=16)
+        ttk.Separator(frame).grid(row=9, column=0, columnspan=2, sticky="ew", pady=16)
 
         ttk.Label(frame, text="Changer le mot de passe Administrateur",
-                  font=("Segoe UI", 11, "bold")).grid(row=9, column=0, columnspan=2, sticky="w")
+                  font=("Segoe UI", 11, "bold")).grid(row=10, column=0, columnspan=2, sticky="w")
         self.new_admin_pwd = tk.StringVar()
         ttk.Entry(frame, textvariable=self.new_admin_pwd, width=20, show="•").grid(
-            row=10, column=0, sticky="w", pady=6)
-        ttk.Button(frame, text="Changer", command=self.change_admin_password).grid(row=10, column=1, padx=8)
+            row=11, column=0, sticky="w", pady=6)
+        ttk.Button(frame, text="Changer", command=self.change_admin_password).grid(row=11, column=1, padx=8)
 
-        ttk.Separator(frame).grid(row=11, column=0, columnspan=2, sticky="ew", pady=16)
+        ttk.Separator(frame).grid(row=12, column=0, columnspan=2, sticky="ew", pady=16)
         ttk.Label(frame, text=PAID_SOFTWARE_NOTICE, foreground="#b8860b",
-                  font=("Segoe UI", 9, "italic")).grid(row=12, column=0, columnspan=2, sticky="w")
+                  font=("Segoe UI", 9, "italic")).grid(row=13, column=0, columnspan=2, sticky="w")
 
     def apply_override(self):
         pwd = self.override_var.get().strip()
@@ -1288,7 +1506,7 @@ class SecurityTab(ttk.Frame):
         self.app.config_data.setdefault("user_password_overrides", {})[period] = pwd
         storage.save(self.app.config_data)
         self.pwd_display.set(pwd)
-        messagebox.showinfo("Appliqué", f"Mot de passe Utilisateur forcé pour {period}.")
+        messagebox.showinfo("Appliqué", f"Mot de passe Utilisateur forcé pour {auth.period_label(period)}.")
 
     def clear_override(self):
         period = auth.current_period()

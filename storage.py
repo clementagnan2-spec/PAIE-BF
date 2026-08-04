@@ -37,8 +37,25 @@ def _default_config() -> dict:
     admin_salt, admin_hash = auth.hash_password("admin123")
     return {
         "entreprise": "Mon Entreprise",
+        # En-tête / pied de page utilisés sur les bulletins de paie PDF,
+        # modifiables par l'administrateur dans l'onglet Paramètres.
+        "bulletin_entete": {
+            "nom_entreprise": "Mon Entreprise",
+            "adresse": "",
+            "telephone": "",
+            "email": "",
+            "note_entete": "",
+        },
+        "bulletin_pied_de_page": (
+            "Ce bulletin de paie est établi conformément à la législation du "
+            "travail en vigueur au Burkina Faso. À conserver sans limitation de durée."
+        ),
         "admin_salt": admin_salt,
         "admin_hash": admin_hash,
+        # Clé propre à CETTE installation, générée aléatoirement une seule
+        # fois. Volontairement différente d'un poste à l'autre : ça évite
+        # qu'un mot de passe Utilisateur valable sur une installation
+        # fonctionne aussi sur une autre (anti-partage entre postes/clients).
         "secret_key": auth.new_secret_key(),
         "user_password_overrides": {},   # {"2026-08": "MOTDEPASSEFORCE"}
         "params": copy.deepcopy(DEFAULT_PARAMS),
