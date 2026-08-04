@@ -34,7 +34,7 @@ def get_data_path() -> str:
 
 
 def _default_config() -> dict:
-    admin_salt, admin_hash = auth.hash_password("admin123")
+    admin_salt, admin_hash = auth.hash_password("admin@123")
     return {
         "entreprise": "Mon Entreprise",
         # En-tête / pied de page utilisés sur les bulletins de paie PDF,
@@ -57,7 +57,7 @@ def _default_config() -> dict:
         # qu'un mot de passe Utilisateur valable sur une installation
         # fonctionne aussi sur une autre (anti-partage entre postes/clients).
         "secret_key": auth.new_secret_key(),
-        # Mot de passe Utilisateur par défaut CONNU (comme admin123 pour
+        # Mot de passe Utilisateur par défaut CONNU (comme admin@123 pour
         # l'admin), valable uniquement pour la période de validité en cours
         # au moment de l'installation. Pratique pour l'installation à
         # distance : pas besoin de se reconnecter en admin juste pour lire
