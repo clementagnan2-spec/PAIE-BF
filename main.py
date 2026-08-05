@@ -68,6 +68,19 @@ def format_period(period_key):
         return period_key or ""
 
 
+def fmt_amount(v):
+    """Formate un montant avec espace comme séparateur de milliers et sans
+    décimales inutiles (150000.0 -> '150 000'). Les valeurs non numériques
+    (texte, None...) sont renvoyées telles quelles."""
+    if v is None or v == "":
+        return ""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return v
+    return f"{f:,.0f}".replace(",", " ")
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -282,6 +295,12 @@ COLUMNS = [
     ("date_saisie", "Date de saisie", 100),
 ]
 
+MONEY_COLUMNS = {
+    "salaire_base", "prime_anciennete", "heures_sup", "sursalaire", "gratification",
+    "indemnite_caisse", "indemnite_logement", "indemnite_fonction", "indemnite_transport",
+    "retenue_pret",
+}
+
 
 class EmployeesTab(ttk.Frame):
     def __init__(self, parent, app: App):
@@ -390,6 +409,8 @@ class EmployeesTab(ttk.Frame):
             for key, _, _ in COLUMNS:
                 if key == "periode_aff":
                     values.append(format_period(emp.get("periode", "")))
+                elif key in MONEY_COLUMNS:
+                    values.append(fmt_amount(emp.get(key, "")))
                 else:
                     values.append(emp.get(key, ""))
             self.tree.insert("", "end", iid=str(emp["numero"]), values=values)
@@ -513,6 +534,15 @@ class EmployeesTab(ttk.Frame):
         for key, var in self.form_vars.items():
             if key == "periode":
                 var.set(self._periode_to_input(emp.get("periode", "")))
+            elif key in MONEY_COLUMNS or key == "personnes_a_charge":
+                # champ modifiable : pas de séparateur de milliers (garde une
+                # valeur ré-éditable/parsable), juste sans ".0" superflu
+                val = emp.get(key, 0)
+                try:
+                    f = float(val)
+                    var.set(str(int(f)) if f == int(f) else str(f))
+                except (TypeError, ValueError):
+                    var.set(str(val))
             else:
                 var.set(str(emp.get(key, "")))
 
@@ -843,7 +873,9 @@ class PayrollTab(ttk.Frame):
             emp = Employee(**e)
             r = compute_payslip(emp, params)
             results.append(r)
-            values = [r[k] for k in self.result_cols]
+            values = [r["numero"] if k == "numero" else
+                      r["nom_prenoms"] if k == "nom_prenoms" else
+                      fmt_amount(r[k]) for k in self.result_cols]
             self.tree.insert("", "end", values=values)
             total_net += r["net_percu"]
             total_cnss += r["cnss_total"]
