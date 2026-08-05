@@ -7,7 +7,7 @@ Application de traitement de la paie mensuelle -- Burkina Faso.
 Deux niveaux d'accès :
   - Administrateur : mot de passe fixe (modifiable), accès aux paramètres
     de paie et au mot de passe Utilisateur.
-  - Utilisateur : mot de passe qui change automatiquement tous les 3 mois,
+  - Utilisateur : mot de passe qui change automatiquement chaque mois,
     accès à la saisie des employés et au calcul de la paie.
 
 Lancer avec :  python main.py
@@ -191,8 +191,8 @@ class LoginScreen(ttk.Frame):
 
         info = ttk.Label(
             center,
-            text="Le mot de passe Utilisateur change automatiquement tous\n"
-                 "les 3 mois. Contactez l'administrateur pour l'obtenir.\n"
+            text="Le mot de passe Utilisateur change automatiquement chaque\n"
+                 "mois. Contactez l'administrateur pour l'obtenir.\n"
                  "Clavier AZERTY : pensez à Maj (Shift) pour taper les chiffres.",
             justify="center", foreground="#555")
         info.pack(pady=(6, 0))
@@ -225,7 +225,7 @@ class LoginScreen(ttk.Frame):
             else:
                 messagebox.showerror("Connexion refusée",
                                       "Mot de passe utilisateur incorrect ou expiré "
-                                      "(il change tous les 3 mois).")
+                                      "(il change chaque mois).")
 
 
 # ==========================================================================
@@ -753,6 +753,7 @@ class EmployeesTab(ttk.Frame):
         try:
             import openpyxl
             from openpyxl.styles import Font, PatternFill
+            from openpyxl.utils import get_column_letter
         except ImportError:
             messagebox.showerror("Module manquant",
                                   "Le module 'openpyxl' n'est pas installé.\n"
@@ -781,9 +782,9 @@ class EmployeesTab(ttk.Frame):
         today = datetime.date.today()
         ws.append(["KABORE Awa", f"{today.month:02d}/{today.year:04d}", "AUTRE",
                    150000, 5000, 0, 0, 0, 10000, 30000, 15000, 20000, 2, 0])
-        for col in ws.columns:
+        for i, col in enumerate(ws.columns, start=1):
             length = max((len(str(c.value)) for c in col if c.value is not None), default=12)
-            ws.column_dimensions[col[0].column_letter].width = max(14, length + 2)
+            ws.column_dimensions[get_column_letter(i)].width = max(14, length + 2)
         wb.save(path)
         messagebox.showinfo(
             "Modèle créé",
@@ -900,6 +901,7 @@ class PayrollTab(ttk.Frame):
         try:
             import openpyxl
             from openpyxl.styles import Font, PatternFill, Alignment
+            from openpyxl.utils import get_column_letter
         except ImportError:
             messagebox.showerror("Module manquant",
                                   "Le module 'openpyxl' n'est pas installé.\n"
@@ -942,9 +944,9 @@ class PayrollTab(ttk.Frame):
                 r["cout_total_employeur"],
             ])
 
-        for col in ws.columns:
+        for i, col in enumerate(ws.columns, start=1):
             length = max((len(str(c.value)) for c in col if c.value is not None), default=10)
-            ws.column_dimensions[col[0].column_letter].width = max(12, length + 2)
+            ws.column_dimensions[get_column_letter(i)].width = max(12, length + 2)
 
         notice_row = ws.max_row + 2
         ws.cell(row=notice_row, column=1, value=PAID_SOFTWARE_NOTICE).font = Font(italic=True, color="B8860B")
@@ -1324,6 +1326,7 @@ class AccountingTab(ttk.Frame):
         try:
             import openpyxl
             from openpyxl.styles import Font, PatternFill, Alignment
+            from openpyxl.utils import get_column_letter
         except ImportError:
             messagebox.showerror("Module manquant",
                                   "Le module 'openpyxl' n'est pas installé.\n"
@@ -1356,9 +1359,9 @@ class AccountingTab(ttk.Frame):
         for compte, libelle, debit, credit in self.last_rows:
             ws.append([compte, libelle, debit or None, credit or None])
 
-        for col in ws.columns:
+        for i, col in enumerate(ws.columns, start=1):
             length = max((len(str(c.value)) for c in col if c.value is not None), default=10)
-            ws.column_dimensions[col[0].column_letter].width = max(14, length + 2)
+            ws.column_dimensions[get_column_letter(i)].width = max(14, length + 2)
 
         notice_row = ws.max_row + 2
         ws.cell(row=notice_row, column=1, value=PAID_SOFTWARE_NOTICE).font = Font(italic=True, color="B8860B")
@@ -1731,25 +1734,25 @@ class SecurityTab(ttk.Frame):
         frame = ttk.Frame(self)
         frame.pack(padx=20, pady=20, anchor="nw")
 
-        ttk.Label(frame, text="Mot de passe Utilisateur du trimestre en cours",
+        ttk.Label(frame, text="Mot de passe Utilisateur du mois en cours",
                   font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         period = auth.current_period()
         current_pwd = auth.get_effective_user_password(app.config_data)
-        ttk.Label(frame, text=f"Trimestre : {auth.period_label(period)}").grid(row=1, column=0, sticky="w")
+        ttk.Label(frame, text=f"Mois : {auth.period_label(period)}").grid(row=1, column=0, sticky="w")
         self.pwd_display = tk.StringVar(value=current_pwd)
         entry = ttk.Entry(frame, textvariable=self.pwd_display, width=20, state="readonly",
                            font=("Consolas", 12, "bold"))
         entry.grid(row=2, column=0, sticky="w", pady=6)
-        ttk.Label(frame, text="(généré automatiquement — change tous les 3 mois : Janv., Avr., Juil., Oct.)",
+        ttk.Label(frame, text="(généré automatiquement — change chaque 1er du mois)",
                   foreground="#666").grid(row=3, column=0, columnspan=2, sticky="w")
         ttk.Label(frame, text="Propre à cette installation : communiquez ce code à l'utilisateur\n"
-                               "de cet ordinateur à chaque changement de trimestre (téléphone, SMS...).",
+                               "de cet ordinateur à chaque changement de mois (téléphone, SMS...).",
                   foreground="#666", justify="left").grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         ttk.Separator(frame).grid(row=5, column=0, columnspan=2, sticky="ew", pady=16)
 
-        ttk.Label(frame, text="Forcer un mot de passe Utilisateur pour ce trimestre",
+        ttk.Label(frame, text="Forcer un mot de passe Utilisateur pour ce mois-ci",
                   font=("Segoe UI", 11, "bold")).grid(row=6, column=0, columnspan=2, sticky="w")
         self.override_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.override_var, width=20).grid(row=7, column=0, sticky="w", pady=6)
