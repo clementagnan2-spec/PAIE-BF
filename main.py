@@ -16,10 +16,11 @@ Lancer avec :  python main.py
 import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+from dataclasses import replace
 
 import auth
 import storage
-from payroll_engine import Employee, compute_payslip, DEFAULT_PARAMS
+from payroll_engine import Employee, compute_payslip, find_base_for_target_net, DEFAULT_PARAMS
 
 APP_TITLE = "Paie Burkina — Traitement des salaires mensuels"
 PAID_SOFTWARE_NOTICE = "Ce logiciel de paie est payant : consultanter280@gmail.com"
@@ -246,6 +247,9 @@ class MainScreen(ttk.Frame):
 
         self.accounting_tab = AccountingTab(notebook, app, self.payroll_tab)
         notebook.add(self.accounting_tab, text="Écritures comptables")
+
+        self.simulator_tab = SimulatorTab(notebook, app, self.employees_tab)
+        notebook.add(self.simulator_tab, text="Simulateur de bulletin")
 
         if app.role == "admin":
             self.params_tab = ParamsTab(notebook, app)
@@ -1329,6 +1333,213 @@ class AccountingTab(ttk.Frame):
 
         wb.save(path)
         messagebox.showinfo("Export réussi", f"Fichier exporté :\n{path}")
+
+
+# ==========================================================================
+# ONGLET SIMULATEUR DE BULLETIN (net -> base + indemnités)
+# ==========================================================================
+
+class SimulatorTab(ttk.Frame):
+    def __init__(self, parent, app: App, employees_tab: "EmployeesTab"):
+        super().__init__(parent)
+        self.app = app
+        self.employees_tab = employees_tab
+        self.last_result = None
+        self.last_employee_template = None
+
+        left = ttk.Frame(self)
+        left.pack(side="left", fill="y", padx=10, pady=10)
+
+        ttk.Label(left, text="Simulateur : Net → Salaire de base",
+                  font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(0, 4))
+        ttk.Label(left, text="Entrez le net souhaité, le logiciel retrouve\n"
+                              "automatiquement le salaire de base à appliquer.",
+                  foreground="#555", justify="left").pack(anchor="w", pady=(0, 12))
+
+        form = ttk.Frame(left)
+        form.pack(anchor="w")
+        self.vars = {}
+
+        def field(label, key, default, row, kind="num"):
+            ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=3)
+            var = tk.StringVar(value=str(default))
+            if kind == "combo":
+                w = ttk.Combobox(form, textvariable=var, values=["CADRE", "AUTRE"],
+                                  state="readonly", width=18)
+            else:
+                w = ttk.Entry(form, textvariable=var, width=20)
+            w.grid(row=row, column=1, pady=3, sticky="w")
+            self.vars[key] = var
+            return w
+
+        field("Nom & Prénoms (optionnel)", "nom_prenoms", "", 0, kind="text")
+        field("Classification", "classification", "AUTRE", 1, kind="combo")
+        field("Personnes à charge", "personnes_a_charge", "0", 2)
+        field("Prime d'ancienneté", "prime_anciennete", "0", 3)
+        field("Heures supplémentaires", "heures_sup", "0", 4)
+        field("Sursalaire", "sursalaire", "0", 5)
+        field("Gratification", "gratification", "0", 6)
+        field("Indemnité Caisse", "indemnite_caisse", "0", 7)
+        field("Retenue prêt/avance", "retenue_pret", "0", 8)
+
+        self.auto_indem_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            left, text="Optimiser automatiquement les indemnités Logement/\n"
+                       "Fonction/Transport (aux plafonds fiscaux exonérés)",
+            variable=self.auto_indem_var, command=self._toggle_indem_fields
+        ).pack(anchor="w", pady=(10, 4))
+
+        indem_form = ttk.Frame(left)
+        indem_form.pack(anchor="w")
+        params = self.app.config_data["params"]
+        self.indem_entries = {}
+        for i, (label, key, param_key) in enumerate([
+            ("Indemnité Logement", "indemnite_logement", "exo_logement"),
+            ("Indemnité Fonction", "indemnite_fonction", "exo_fonction"),
+            ("Indemnité Transport", "indemnite_transport", "exo_transport"),
+        ]):
+            plafond = params[param_key][1]
+            ttk.Label(indem_form, text=label).grid(row=i, column=0, sticky="w", pady=3)
+            var = tk.StringVar(value=str(plafond))
+            entry = ttk.Entry(indem_form, textvariable=var, width=20, state="readonly")
+            entry.grid(row=i, column=1, pady=3, sticky="w")
+            self.vars[key] = var
+            self.indem_entries[key] = entry
+
+        ttk.Separator(left).pack(fill="x", pady=12)
+        ttk.Label(left, text="Net à payer souhaité (FCFA)", font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        self.target_var = tk.StringVar(value="150000")
+        ttk.Entry(left, textvariable=self.target_var, width=22, font=("Segoe UI", 11)).pack(anchor="w", pady=(2, 10))
+
+        ttk.Button(left, text="Simuler", command=self.simulate).pack(anchor="w", pady=(0, 6))
+        self.create_btn = ttk.Button(left, text="Créer l'employé à partir de cette simulation",
+                                      command=self.create_employee, state="disabled")
+        self.create_btn.pack(anchor="w")
+
+        # --- Zone de résultat --------------------------------------------
+        right = ttk.Frame(self)
+        right.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        ttk.Label(right, text="Résultat de la simulation", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+
+        self.result_text = tk.Text(right, width=52, height=26, font=("Consolas", 10),
+                                    state="disabled", relief="solid", borderwidth=1)
+        self.result_text.pack(anchor="w", pady=(8, 0), fill="y")
+
+    def _toggle_indem_fields(self):
+        auto = self.auto_indem_var.get()
+        params = self.app.config_data["params"]
+        mapping = {"indemnite_logement": "exo_logement", "indemnite_fonction": "exo_fonction",
+                   "indemnite_transport": "exo_transport"}
+        for key, entry in self.indem_entries.items():
+            if auto:
+                self.vars[key].set(str(params[mapping[key]][1]))
+                entry.config(state="readonly")
+            else:
+                entry.config(state="normal")
+
+    def _read_template(self):
+        v = self.vars
+        try:
+            emp = Employee(
+                numero=0,
+                nom_prenoms=v["nom_prenoms"].get().strip() or "Simulation",
+                classification=v["classification"].get() or "AUTRE",
+                periode="",
+                salaire_base=0.0,
+                prime_anciennete=float(v["prime_anciennete"].get() or 0),
+                heures_sup=float(v["heures_sup"].get() or 0),
+                sursalaire=float(v["sursalaire"].get() or 0),
+                gratification=float(v["gratification"].get() or 0),
+                indemnite_caisse=float(v["indemnite_caisse"].get() or 0),
+                indemnite_logement=float(v["indemnite_logement"].get() or 0),
+                indemnite_fonction=float(v["indemnite_fonction"].get() or 0),
+                indemnite_transport=float(v["indemnite_transport"].get() or 0),
+                personnes_a_charge=int(float(v["personnes_a_charge"].get() or 0)),
+                retenue_pret=float(v["retenue_pret"].get() or 0),
+            )
+        except ValueError:
+            messagebox.showerror("Erreur de saisie", "Merci de vérifier les valeurs numériques saisies.")
+            return None
+        try:
+            target = float(self.target_var.get().replace(" ", "").replace(",", "."))
+        except ValueError:
+            messagebox.showerror("Erreur de saisie", "Le « Net à payer souhaité » doit être un nombre.")
+            return None
+        if target <= 0:
+            messagebox.showerror("Erreur de saisie", "Le « Net à payer souhaité » doit être positif.")
+            return None
+        return emp, target
+
+    def simulate(self):
+        parsed = self._read_template()
+        if parsed is None:
+            return
+        emp_template, target = parsed
+        params = self.app.config_data["params"]
+
+        base, r = find_base_for_target_net(emp_template, params, target_net=target)
+        self.last_result = r
+        self.last_employee_template = replace(emp_template, salaire_base=base)
+        self.create_btn.config(state="normal")
+
+        def money(v):
+            return f"{v:,.0f}".replace(",", " ") + " FCFA"
+
+        ecart = r["net_percu"] - target
+        lines = [
+            f"Net à payer souhaité      : {money(target)}",
+            f"Net à payer obtenu        : {money(r['net_percu'])}  (écart : {ecart:+.0f})",
+            "",
+            f"→ Salaire de base à payer : {money(base)}",
+            "",
+            "── Détail du bulletin obtenu ──────────────────",
+            f"Indemnité Logement         {money(r['indemnite_logement'])}",
+            f"Indemnité Fonction         {money(r['indemnite_fonction'])}",
+            f"Indemnité Transport        {money(r['indemnite_transport'])}",
+            f"Indemnité Caisse           {money(r['indemnite_caisse'])}",
+            f"Prime d'ancienneté         {money(r['prime_anciennete'])}",
+            f"Heures sup. + Sursalaire   {money(r['heures_sup'] + r['sursalaire'])}",
+            f"Gratification              {money(r['gratification'])}",
+            "─────────────────────────────────────────────",
+            f"Rémunération totale        {money(r['remuneration_totale'])}",
+            "",
+            f"CNSS (salariale)           {money(r['cnss_salariale'])}",
+            f"IUTS                       {money(r['iuts_net'])}",
+            f"Retenue obligatoire (1%)   {money(r['retenue_obligatoire'])}",
+            f"Retenue prêt/avance        {money(r['retenue_pret'])}",
+            "─────────────────────────────────────────────",
+            f"NET À PAYER                {money(r['net_percu'])}",
+            "",
+            f"Coût total employeur       {money(r['cout_total_employeur'])}",
+        ]
+
+        self.result_text.config(state="normal")
+        self.result_text.delete("1.0", "end")
+        self.result_text.insert("1.0", "\n".join(lines))
+        self.result_text.config(state="disabled")
+
+    def create_employee(self):
+        if self.last_employee_template is None:
+            return
+        emp = self.last_employee_template
+        if not emp.nom_prenoms or emp.nom_prenoms == "Simulation":
+            messagebox.showinfo("Nom requis",
+                                 "Renseignez le champ « Nom & Prénoms » avant de créer l'employé.")
+            return
+        emp = replace(emp, numero=self.app.config_data["next_numero"],
+                      periode=current_period_key(),
+                      date_saisie=datetime.date.today().isoformat())
+        self.app.config_data["employees"].append(emp.to_dict())
+        self.app.config_data["next_numero"] += 1
+        try:
+            storage.save(self.app.config_data)
+        except Exception as exc:
+            messagebox.showerror("Erreur", f"Impossible d'enregistrer : {exc}")
+            return
+        self.employees_tab.refresh_tree()
+        messagebox.showinfo("Employé créé",
+                             f"« {emp.nom_prenoms} » a été ajouté à la liste des employés\n"
+                             f"(période : {format_period(emp.periode)}).")
 
 
 # ==========================================================================

@@ -17,7 +17,7 @@ Toutes les valeurs par défaut ci-dessous proviennent du fichier
 """
 
 import math
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from typing import Optional
 
 
@@ -251,3 +251,56 @@ def compute_payslip(emp: Employee, params: dict) -> dict:
         "cnss_total": AJ,
         "iuts_plus_tpa": AK,
     }
+
+
+def find_base_for_target_net(emp_template: Employee, params: dict, target_net: float,
+                              target_field: str = "net_percu",
+                              lo: float = 0.0, hi: float = 5_000_000.0,
+                              tol: float = 1.0, max_iter: int = 80):
+    """Simulateur 'net -> base' : trouve, par dichotomie, le salaire de base
+    (`salaire_base`) à appliquer à `emp_template` (les autres éléments —
+    indemnités, primes, personnes à charge... — restant fixes) pour que le
+    résultat calculé (par défaut le Net Perçu) atteigne `target_net`.
+
+    S'appuie sur le fait que le Net Perçu est une fonction croissante (au
+    sens large) du salaire de base : chaque franc de base supplémentaire
+    produit toujours un peu plus de net, même une fois le plafond CNSS
+    atteint ou dans la tranche IUTS la plus haute (taux marginal max 25%,
+    donc toujours au moins 75% qui reste).
+
+    Retourne (salaire_base_trouve, résultat_complet_compute_payslip).
+    """
+
+    def net_for(base):
+        e = replace(emp_template, salaire_base=base)
+        r = compute_payslip(e, params)
+        return r[target_field], r
+
+    # Élargit la borne haute si besoin pour être sûr d'encadrer la solution.
+    net_hi, result_hi = net_for(hi)
+    tries = 0
+    while net_hi < target_net and tries < 12:
+        hi *= 2
+        net_hi, result_hi = net_for(hi)
+        tries += 1
+
+    net_lo, result_lo = net_for(lo)
+    if net_lo >= target_net:
+        return lo, result_lo
+    if net_hi < target_net:
+        # Même avec une base très élevée on n'atteint pas la cible (cas
+        # limite improbable) : on renvoie le meilleur essai obtenu.
+        return hi, result_hi
+
+    result = result_hi
+    mid = hi
+    for _ in range(max_iter):
+        mid = (lo + hi) / 2
+        net_mid, result = net_for(mid)
+        if abs(net_mid - target_net) <= tol:
+            break
+        if net_mid < target_net:
+            lo = mid
+        else:
+            hi = mid
+    return mid, result
