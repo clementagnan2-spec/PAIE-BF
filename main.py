@@ -14,6 +14,7 @@ Lancer avec :  python main.py
 """
 
 import datetime
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from dataclasses import replace
@@ -1077,23 +1078,49 @@ class PayrollTab(ttk.Frame):
         c.save()
 
     def _draw_payslip_page(self, c, width, height, mm, entete, pied, periode_txt, r):
+        import base64
+        import io
+        from reportlab.lib.utils import ImageReader
+
         x_left = 18 * mm
         x_right = width - 18 * mm
         y = height - 18 * mm
 
         # --- En-tête ---------------------------------------------------
+        text_x = x_left
+        logo_bottom_y = None
+        logo_b64 = entete.get("logo_base64")
+        if logo_b64:
+            try:
+                img_bytes = base64.b64decode(logo_b64)
+                img = ImageReader(io.BytesIO(img_bytes))
+                iw, ih = img.getSize()
+                logo_h = 18 * mm
+                logo_w = logo_h * (iw / ih) if ih else logo_h
+                logo_w = min(logo_w, 35 * mm)
+                logo_top_y = y
+                c.drawImage(img, x_left, logo_top_y - logo_h + 3 * mm, width=logo_w, height=logo_h,
+                            preserveAspectRatio=True, mask="auto")
+                logo_bottom_y = logo_top_y - logo_h + 1 * mm
+                text_x = x_left + logo_w + 6 * mm
+            except Exception:
+                pass  # logo illisible : on continue sans bloquer la génération du bulletin
+
         c.setFont("Helvetica-Bold", 14)
-        c.drawString(x_left, y, entete.get("nom_entreprise") or "Mon Entreprise")
+        c.drawString(text_x, y, entete.get("nom_entreprise") or "Mon Entreprise")
         y -= 6 * mm
         c.setFont("Helvetica", 9)
         coords = [v for v in (entete.get("adresse"), entete.get("telephone"), entete.get("email")) if v]
         if coords:
-            c.drawString(x_left, y, "  •  ".join(coords))
+            c.drawString(text_x, y, "  •  ".join(coords))
             y -= 5 * mm
         if entete.get("note_entete"):
             c.setFont("Helvetica-Oblique", 8)
-            c.drawString(x_left, y, entete["note_entete"])
+            c.drawString(text_x, y, entete["note_entete"])
             y -= 5 * mm
+
+        if logo_bottom_y is not None:
+            y = min(y, logo_bottom_y)
 
         y -= 2 * mm
         c.setLineWidth(1)
@@ -1713,10 +1740,62 @@ class ParamsTab(ttk.Frame):
         self.footer_text.grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
         row += 1
 
+        # --- Logo de l'entreprise ------------------------------------------
+        ttk.Label(inner, text="Logo de l'entreprise (en-tête du bulletin PDF)").grid(
+            row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(10, 2))
+        row += 1
+
+        self._logo_base64 = entete.get("logo_base64")  # peut être None
+        logo_name = entete.get("logo_filename", "")
+        self._logo_filename = logo_name
+        self.logo_status_var = tk.StringVar(
+            value=f"Logo actuel : {logo_name}" if self._logo_base64 else "Aucun logo défini")
+        ttk.Label(inner, textvariable=self.logo_status_var, foreground="#555").grid(
+            row=row, column=0, columnspan=2, sticky="w", padx=8)
+        row += 1
+
+        logo_btns = ttk.Frame(inner)
+        logo_btns.grid(row=row, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 6))
+        ttk.Button(logo_btns, text="Choisir un logo...", command=self.choose_logo).pack(side="left")
+        ttk.Button(logo_btns, text="Retirer le logo", command=self.remove_logo).pack(side="left", padx=(8, 0))
+        row += 1
+        ttk.Label(inner, text="Formats acceptés : PNG ou JPG. Le logo apparaîtra en haut à\n"
+                               "gauche de chaque bulletin de paie généré.",
+                  foreground="#666", justify="left").grid(row=row, column=0, columnspan=2, sticky="w", padx=8)
+        row += 1
+
         ttk.Button(inner, text="Ouvrir le dossier des données",
                    command=self.open_data_folder).grid(row=row, column=0, pady=16, padx=8, sticky="w")
         ttk.Button(inner, text="Enregistrer les paramètres",
                    command=self.save_params).grid(row=row, column=1, pady=16, padx=8, sticky="w")
+
+    def choose_logo(self):
+        path = filedialog.askopenfilename(
+            title="Choisir un logo",
+            filetypes=[("Images", "*.png *.jpg *.jpeg"), ("Tous les fichiers", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except Exception as exc:
+            messagebox.showerror("Erreur", f"Impossible de lire le fichier : {exc}")
+            return
+        if len(raw) > 3_000_000:
+            messagebox.showerror("Fichier trop volumineux",
+                                  "Merci de choisir une image de moins de 3 Mo.")
+            return
+        import base64
+        self._logo_base64 = base64.b64encode(raw).decode("ascii")
+        filename = os.path.basename(path)
+        self.logo_status_var.set(f"Logo sélectionné : {filename}  (cliquez sur « Enregistrer les paramètres »)")
+        self._logo_filename = filename
+
+    def remove_logo(self):
+        self._logo_base64 = None
+        self._logo_filename = ""
+        self.logo_status_var.set("Aucun logo défini  (cliquez sur « Enregistrer les paramètres »)")
 
     def save_params(self):
         try:
@@ -1744,6 +1823,8 @@ class ParamsTab(ttk.Frame):
             "telephone": self.text_vars["telephone"].get().strip(),
             "email": self.text_vars["email"].get().strip(),
             "note_entete": self.text_vars["note_entete"].get().strip(),
+            "logo_base64": getattr(self, "_logo_base64", None),
+            "logo_filename": getattr(self, "_logo_filename", ""),
         }
         self.app.config_data["bulletin_pied_de_page"] = self.footer_text.get("1.0", "end").strip()
         self.app.config_data["entreprise"] = self.text_vars["nom_entreprise"].get().strip() or "Mon Entreprise"
