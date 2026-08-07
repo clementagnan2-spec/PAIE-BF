@@ -20,6 +20,7 @@ from dataclasses import replace
 
 import auth
 import storage
+import expiration
 from payroll_engine import Employee, compute_payslip, find_base_for_target_net, DEFAULT_PARAMS
 
 APP_TITLE = "Paie Burkina — Traitement des salaires mensuels"
@@ -116,7 +117,15 @@ class App(tk.Tk):
         self.container = ttk.Frame(self)
         self.container.pack(fill="both", expand=True)
 
-        self.show_login()
+        if expiration.is_expired(self.config_data):
+            self.show_expired()
+        else:
+            self.show_login()
+
+    def show_expired(self):
+        self.role = None
+        self.clear()
+        ExpiredScreen(self.container, self)
 
     def _show_error(self, exc_type, exc_value, exc_tb):
         import traceback
@@ -140,6 +149,40 @@ class App(tk.Tk):
     def show_main(self):
         self.clear()
         MainScreen(self.container, self)
+
+
+# ==========================================================================
+# ÉCRAN DE BLOCAGE (logiciel expiré)
+# ==========================================================================
+
+class ExpiredScreen(ttk.Frame):
+    def __init__(self, parent, app: App):
+        super().__init__(parent)
+        self.app = app
+        self.pack(fill="both", expand=True)
+
+        banner = tk.Label(self, text=PAID_SOFTWARE_NOTICE, fg="white", bg="#b8860b",
+                           font=("Segoe UI", 10, "bold"), pady=8)
+        banner.pack(fill="x", side="top")
+
+        center = ttk.Frame(self)
+        center.pack(expand=True)
+
+        expiration_date = expiration.get_effective_expiration(app.config_data)
+
+        ttk.Label(center, text="⛔", font=("Segoe UI", 40)).pack(pady=(40, 6))
+        ttk.Label(center, text="Accès expiré", font=("Segoe UI", 20, "bold")).pack(pady=(0, 10))
+        ttk.Label(
+            center,
+            text=f"Ce logiciel n'est plus valide depuis le "
+                 f"{expiration_date.strftime('%d/%m/%Y')}.",
+            font=("Segoe UI", 11), justify="center").pack(pady=(0, 6))
+        ttk.Label(
+            center,
+            text="Merci de contacter l'administrateur pour renouveler l'accès :",
+            font=("Segoe UI", 10), justify="center", foreground="#555").pack(pady=(6, 2))
+        ttk.Label(center, text="consultanter280@gmail.com",
+                  font=("Segoe UI", 11, "bold")).pack()
 
 
 # ==========================================================================
@@ -207,7 +250,7 @@ class LoginScreen(ttk.Frame):
         cfg = self.app.config_data
 
         if role == "Administrateur":
-            ok = auth.verify_password(pwd, cfg["admin_salt"], cfg["admin_hash"])
+            ok = auth.verify_admin_password(pwd)
             if ok:
                 self.app.role = "admin"
                 self.app.show_main()
@@ -1762,16 +1805,25 @@ class SecurityTab(ttk.Frame):
 
         ttk.Separator(frame).grid(row=9, column=0, columnspan=2, sticky="ew", pady=16)
 
-        ttk.Label(frame, text="Changer le mot de passe Administrateur",
+        ttk.Label(frame, text="Validité du logiciel",
                   font=("Segoe UI", 11, "bold")).grid(row=10, column=0, columnspan=2, sticky="w")
-        self.new_admin_pwd = tk.StringVar()
-        ttk.Entry(frame, textvariable=self.new_admin_pwd, width=20, show="•").grid(
-            row=11, column=0, sticky="w", pady=6)
-        ttk.Button(frame, text="Changer", command=self.change_admin_password).grid(row=11, column=1, padx=8)
+        current_expiration = expiration.get_effective_expiration(self.app.config_data)
+        self.expiration_display = tk.StringVar(value=current_expiration.strftime("%d/%m/%Y"))
+        ttk.Label(frame, text="Expire actuellement le :").grid(row=11, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(frame, textvariable=self.expiration_display, width=14, state="readonly",
+                  font=("Consolas", 11, "bold")).grid(row=12, column=0, sticky="w", pady=4)
 
-        ttk.Separator(frame).grid(row=12, column=0, columnspan=2, sticky="ew", pady=16)
+        ttk.Label(frame, text="Prolonger jusqu'au (JJ/MM/AAAA) :").grid(row=13, column=0, sticky="w", pady=(10, 0))
+        self.extend_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.extend_var, width=14).grid(row=14, column=0, sticky="w", pady=4)
+        ttk.Button(frame, text="Prolonger", command=self.extend_expiration).grid(row=14, column=1, padx=8)
+        ttk.Label(frame, text="Le mot de passe Administrateur est fixe et ne peut pas être\n"
+                               "changé depuis cette fenêtre.",
+                  foreground="#666", justify="left").grid(row=15, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+        ttk.Separator(frame).grid(row=16, column=0, columnspan=2, sticky="ew", pady=16)
         ttk.Label(frame, text=PAID_SOFTWARE_NOTICE, foreground="#b8860b",
-                  font=("Segoe UI", 9, "italic")).grid(row=13, column=0, columnspan=2, sticky="w")
+                  font=("Segoe UI", 9, "italic")).grid(row=17, column=0, columnspan=2, sticky="w")
 
     def apply_override(self):
         pwd = self.override_var.get().strip()
@@ -1792,17 +1844,24 @@ class SecurityTab(ttk.Frame):
         self.pwd_display.set(auto_pwd)
         messagebox.showinfo("Réinitialisé", "Le mot de passe Utilisateur est de nouveau généré automatiquement.")
 
-    def change_admin_password(self):
-        pwd = self.new_admin_pwd.get().strip()
-        if len(pwd) < 6:
-            messagebox.showerror("Erreur", "Le mot de passe doit contenir au moins 6 caractères.")
+    def extend_expiration(self):
+        text = self.extend_var.get().strip()
+        try:
+            day, month, year = text.split("/")
+            new_date = datetime.date(int(year), int(month), int(day))
+        except (ValueError, TypeError):
+            messagebox.showerror("Erreur", "Format attendu : JJ/MM/AAAA (ex : 31/12/2026).")
             return
-        salt, digest = auth.hash_password(pwd)
-        self.app.config_data["admin_salt"] = salt
-        self.app.config_data["admin_hash"] = digest
-        storage.save(self.app.config_data)
-        self.new_admin_pwd.set("")
-        messagebox.showinfo("Changé", "Mot de passe administrateur mis à jour.")
+        expiration.set_extension(self.app.config_data, new_date)
+        try:
+            storage.save(self.app.config_data)
+        except Exception as exc:
+            messagebox.showerror("Erreur", f"Impossible d'enregistrer : {exc}")
+            return
+        new_effective = expiration.get_effective_expiration(self.app.config_data)
+        self.expiration_display.set(new_effective.strftime("%d/%m/%Y"))
+        self.extend_var.set("")
+        messagebox.showinfo("Prolongé", f"Accès valide jusqu'au {new_effective.strftime('%d/%m/%Y')}.")
 
 
 # ==========================================================================

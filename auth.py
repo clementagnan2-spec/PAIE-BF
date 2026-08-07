@@ -3,8 +3,13 @@
 auth.py
 -------
 Gestion des deux niveaux d'accès :
-  - Administrateur : mot de passe fixe, choisi/changé par l'admin.
-      -> accès aux Paramètres de paie ET au mot de passe Utilisateur en cours.
+  - Administrateur : mot de passe FIXE, intégré au code (voir
+    ADMIN_PASSWORD ci-dessous), identique sur toutes les installations
+    issues de ce même exécutable. Non modifiable depuis l'application --
+    pour le changer il faut modifier ce fichier et recompiler/redistribuer
+    un nouveau .exe.
+      -> accès aux Paramètres de paie, au mot de passe Utilisateur en
+         cours, et à la prolongation de la date d'expiration du logiciel.
   - Utilisateur : mot de passe qui change automatiquement chaque mois.
       -> accès à la saisie et au calcul de la paie uniquement.
 
@@ -14,23 +19,36 @@ HMAC-SHA256. Il est donc imprévisible sans connaître la clé secrète, mais
 reproductible automatiquement à chaque changement de mois -- pas besoin
 d'une connexion Internet ni d'une action manuelle pour qu'il change.
 
-L'administrateur peut à tout moment :
-  - consulter le mot de passe Utilisateur du mois en cours (onglet Sécurité)
-  - forcer un mot de passe Utilisateur personnalisé pour le mois en cours
-  - régénérer/relancer la clé secrète (ce qui change tous les mots de passe
-    futurs, mais PAS ceux déjà communiqués et notés ailleurs)
+Voir aussi expiration.py pour le verrou de date d'expiration du logiciel.
 """
 
 import hashlib
 import hmac
-import os
 import secrets
 import datetime
 from typing import Optional
 
 
 # ---------------------------------------------------------------------------
-# Hachage du mot de passe Administrateur
+# Mot de passe Administrateur -- FIXE, intégré au code
+# ---------------------------------------------------------------------------
+# Pour changer ce mot de passe : modifier la valeur ci-dessous, puis
+# recompiler et redistribuer un nouveau .exe à vos clients. Les .exe déjà
+# installés continueront d'utiliser l'ancien mot de passe tant qu'ils ne
+# sont pas mis à jour.
+
+ADMIN_PASSWORD = "ouaga2001@@@"
+
+
+def verify_admin_password(password: str) -> bool:
+    """Comparaison en temps constant (évite les attaques par mesure de
+    timing), même si la valeur elle-même est un simple texte fixe."""
+    return hmac.compare_digest(password or "", ADMIN_PASSWORD)
+
+
+# ---------------------------------------------------------------------------
+# (Ancien mécanisme de hachage, conservé si besoin ailleurs -- plus utilisé
+# pour le mot de passe Administrateur, qui est désormais fixe ci-dessus.)
 # ---------------------------------------------------------------------------
 
 def hash_password(password: str, salt: Optional[bytes] = None):
