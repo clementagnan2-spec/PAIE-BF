@@ -57,6 +57,8 @@ def normalize_period(text, default=None):
             month, year = int(a), int(b)
         if not (1 <= month <= 12):
             return default
+        if not (2000 <= year <= 2100):
+            return default
         return f"{year:04d}-{month:02d}"
     except ValueError:
         return default
@@ -68,6 +70,21 @@ def format_period(period_key):
         return f"{MOIS_FR[int(month) - 1]} {year}"
     except Exception:
         return period_key or ""
+
+
+def next_period_key(period_key):
+    """Renvoie la clé du mois suivant, ex: '2026-08' -> '2026-09',
+    '2026-12' -> '2027-01'."""
+    try:
+        year, month = period_key.split("-")
+        year, month = int(year), int(month)
+    except Exception:
+        return current_period_key()
+    month += 1
+    if month > 12:
+        month = 1
+        year += 1
+    return f"{year:04d}-{month:02d}"
 
 
 def fmt_amount(v):
@@ -360,6 +377,9 @@ class EmployeesTab(ttk.Frame):
                    command=self.import_from_file).pack(side="left", padx=(8, 4))
         ttk.Button(toolbar, text="Télécharger le modèle Excel",
                    command=self.download_template).pack(side="left", padx=4)
+        ttk.Separator(toolbar, orient="vertical").pack(side="left", fill="y", padx=8)
+        ttk.Button(toolbar, text="Dupliquer vers le mois suivant",
+                   command=self.duplicate_to_next_month).pack(side="left", padx=4)
 
         # IMPORTANT : on réserve d'abord la place du panneau de droite (largeur
         # fixe) AVANT de placer le tableau (qui a beaucoup de colonnes et
@@ -835,6 +855,55 @@ class EmployeesTab(ttk.Frame):
             f"Modèle enregistré :\n{path}\n\n"
             "Remplissez une ligne par employé (la classification doit être "
             "CADRE ou AUTRE), puis utilisez « Importer depuis Excel/CSV ».")
+
+    def duplicate_to_next_month(self):
+        employees = self.app.config_data["employees"]
+        if not employees:
+            messagebox.showinfo("Info", "Aucun employé à dupliquer pour le moment.")
+            return
+
+        # Le mois "source" = le plus récent parmi les employés déjà saisis
+        # (les clés "AAAA-MM" se comparent correctement en triant comme du texte).
+        periodes = [e.get("periode") for e in employees if e.get("periode")]
+        if not periodes:
+            messagebox.showinfo("Info", "Aucun employé n'a de période de paie renseignée.")
+            return
+        source_period = max(periodes)
+        target_period = next_period_key(source_period)
+
+        source_employees = [e for e in employees if e.get("periode") == source_period]
+        already_in_target = [e for e in employees if e.get("periode") == target_period]
+
+        msg = (f"Dupliquer les {len(source_employees)} employé(s) de "
+               f"{format_period(source_period)} vers {format_period(target_period)} ?")
+        if already_in_target:
+            msg += (f"\n\n⚠ {len(already_in_target)} employé(s) existent déjà pour "
+                     f"{format_period(target_period)} — continuer risque de créer des doublons.")
+        if not messagebox.askyesno("Dupliquer vers le mois suivant", msg):
+            return
+
+        today_iso = datetime.date.today().isoformat()
+        count = 0
+        for e in source_employees:
+            new_emp = dict(e)
+            new_emp["numero"] = self.app.config_data["next_numero"]
+            new_emp["periode"] = target_period
+            new_emp["date_saisie"] = today_iso
+            self.app.config_data["employees"].append(new_emp)
+            self.app.config_data["next_numero"] += 1
+            count += 1
+
+        try:
+            storage.save(self.app.config_data)
+        except Exception as exc:
+            messagebox.showerror("Erreur", f"Impossible d'enregistrer : {exc}")
+            return
+        self.refresh_tree()
+        messagebox.showinfo(
+            "Duplication terminée",
+            f"{count} employé(s) dupliqué(s) vers {format_period(target_period)}.\n\n"
+            f"Allez dans l'onglet « Bulletins / État de paie », sélectionnez "
+            f"{format_period(target_period)}, et cliquez sur « Calculer la paie ».")
 
 
 # ==========================================================================
