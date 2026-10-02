@@ -34,7 +34,6 @@ def get_data_path() -> str:
 
 
 def _default_config() -> dict:
-    admin_salt, admin_hash = auth.hash_password("admin@123")
     return {
         "entreprise": "Mon Entreprise",
         # En-tête / pied de page utilisés sur les bulletins de paie PDF,
@@ -50,21 +49,24 @@ def _default_config() -> dict:
             "Ce bulletin de paie est établi conformément à la législation du "
             "travail en vigueur au Burkina Faso. À conserver sans limitation de durée."
         ),
-        "admin_salt": admin_salt,
-        "admin_hash": admin_hash,
+        # Mot de passe Administrateur : désormais FIXE, intégré au code
+        # (voir auth.ADMIN_PASSWORD) -- plus stocké ici du tout.
+        # Prolongation de la date d'expiration (voir expiration.py). None =
+        # aucune prolongation accordée, seule la date figée dans le code fait foi.
+        "access_extended_until": None,
         # Clé propre à CETTE installation, générée aléatoirement une seule
         # fois. Volontairement différente d'un poste à l'autre : ça évite
         # qu'un mot de passe Utilisateur valable sur une installation
         # fonctionne aussi sur une autre (anti-partage entre postes/clients).
         "secret_key": auth.new_secret_key(),
-        # Mot de passe Utilisateur par défaut CONNU (comme admin@123 pour
-        # l'admin), valable uniquement pour la période de validité en cours
-        # au moment de l'installation. Pratique pour l'installation à
-        # distance : pas besoin de se reconnecter en admin juste pour lire
-        # le premier mot de passe. Dès que cette période se termine, plus
-        # aucun mot de passe forcé n'existe pour la nouvelle période : le
-        # logiciel repasse automatiquement sur la génération habituelle
-        # (dérivée de la clé secrète ci-dessus).
+        # Mot de passe Utilisateur par défaut CONNU ("user123"), valable
+        # uniquement pour la période de validité en cours au moment de
+        # l'installation. Pratique pour l'installation à distance : pas
+        # besoin de se reconnecter en admin juste pour lire le premier mot
+        # de passe. Dès que cette période se termine, plus aucun mot de
+        # passe forcé n'existe pour la nouvelle période : le logiciel
+        # repasse automatiquement sur la génération habituelle (dérivée de
+        # la clé secrète ci-dessus).
         "user_password_overrides": {auth.current_period(): "user123"},
         "params": copy.deepcopy(DEFAULT_PARAMS),
         "employees": [],

@@ -19,6 +19,9 @@ protégés par mot de passe.
   tranches, réduction IUTS selon les personnes à charge, charges patronales).
   → **Vérifié cellule par cellule contre le fichier Excel fourni : résultats identiques.**
 - **Export Excel** de l'état de paie du mois (bouton "Exporter vers Excel").
+- **Bulletins de paie PDF**, individuels ou pour toute la période, avec en-tête
+  (nom, adresse, téléphone, email de l'entreprise) et pied de page personnalisables
+  dans l'onglet Paramètres.
 - **Deux comptes d'accès** :
   - **Administrateur** : mot de passe fixe (modifiable), accès aux
     paramètres de paie (taux, plafonds) et au mot de passe Utilisateur.
@@ -27,8 +30,12 @@ protégés par mot de passe.
     clé secrète stockée localement — l'administrateur peut le consulter
     à tout moment dans l'onglet "Sécurité", ou en forcer un manuellement).
 
-Mot de passe administrateur par défaut à la première utilisation : `admin123`
+Mot de passe administrateur par défaut à la première utilisation : `admin@123`
 **→ à changer immédiatement** dans l'onglet Sécurité après la première connexion.
+
+Mot de passe Utilisateur par défaut à la première utilisation : `user123`
+(valable uniquement pour le premier mois ; ensuite il repasse
+automatiquement sur la génération habituelle, propre à cette installation).
 
 ## Où sont stockées les données ?
 

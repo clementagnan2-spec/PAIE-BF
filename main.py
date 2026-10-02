@@ -135,10 +135,13 @@ class App(tk.Tk):
         self.container = ttk.Frame(self)
         self.container.pack(fill="both", expand=True)
 
-        if expiration.is_expired(self.config_data):
-            self.show_expired()
-        else:
-            self.show_login()
+        # IMPORTANT : même expiré, on affiche TOUJOURS l'écran de connexion
+        # (pas un blocage total) -- l'Administrateur doit pouvoir se
+        # connecter quoi qu'il arrive, ne serait-ce que pour consulter/
+        # communiquer le mot de passe Utilisateur ou prolonger l'accès
+        # depuis l'onglet Sécurité. Seul le rôle Utilisateur est refusé
+        # tant que le logiciel est expiré (voir LoginScreen.try_login).
+        self.show_login()
 
     def show_expired(self):
         self.role = None
@@ -279,6 +282,13 @@ class LoginScreen(ttk.Frame):
                                       "exactement ce qui est tapé (attention aux claviers AZERTY "
                                       "pour les chiffres, qui nécessitent la touche Maj).")
         else:
+            if expiration.is_expired(cfg):
+                messagebox.showerror(
+                    "Accès expiré",
+                    "Ce logiciel n'est plus valide. Seul l'Administrateur peut encore se "
+                    "connecter (pour consulter le mot de passe Utilisateur ou prolonger "
+                    "l'accès).\n\nContactez l'administrateur : consultanter280@gmail.com")
+                return
             expected = auth.get_effective_user_password(cfg)
             if pwd == expected:
                 self.app.role = "user"
@@ -309,6 +319,15 @@ class MainScreen(ttk.Frame):
         banner = tk.Label(self, text=PAID_SOFTWARE_NOTICE, fg="white", bg="#b8860b",
                            font=("Segoe UI", 9, "bold"), pady=4)
         banner.pack(fill="x")
+
+        if app.role == "admin" and expiration.is_expired(app.config_data):
+            exp_date = expiration.get_effective_expiration(app.config_data)
+            expired_banner = tk.Label(
+                self,
+                text=f"⚠ Logiciel expiré depuis le {exp_date.strftime('%d/%m/%Y')} — "
+                     f"prolongez l'accès dans l'onglet Sécurité (l'Utilisateur ne peut pas se connecter tant que ce n'est pas fait).",
+                fg="white", bg="#c0392b", font=("Segoe UI", 9, "bold"), pady=4)
+            expired_banner.pack(fill="x")
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True, padx=8, pady=8)
@@ -1948,8 +1967,10 @@ class SecurityTab(ttk.Frame):
         ttk.Label(frame, text="Forcer un mot de passe Utilisateur pour ce mois-ci",
                   font=("Segoe UI", 11, "bold")).grid(row=6, column=0, columnspan=2, sticky="w")
         self.override_var = tk.StringVar()
-        ttk.Entry(frame, textvariable=self.override_var, width=20).grid(row=7, column=0, sticky="w", pady=6)
+        override_entry = ttk.Entry(frame, textvariable=self.override_var, width=20, show="•")
+        override_entry.grid(row=7, column=0, sticky="w", pady=6)
         ttk.Button(frame, text="Appliquer", command=self.apply_override).grid(row=7, column=1, padx=8)
+
         ttk.Button(frame, text="Revenir à la génération automatique",
                    command=self.clear_override).grid(row=8, column=0, columnspan=2, sticky="w", pady=(0, 6))
 
