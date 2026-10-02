@@ -15,6 +15,7 @@ Lancer avec :  python main.py
 
 import datetime
 import os
+import time
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from dataclasses import replace
@@ -100,6 +101,9 @@ def fmt_amount(v):
     return f"{f:,.0f}".replace(",", " ")
 
 
+ADMIN_IDLE_TIMEOUT_SECONDS = 5 * 60  # 5 minutes d'inactivité => déconnexion admin
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -132,6 +136,12 @@ class App(tk.Tk):
             raise
         self.role = None  # "admin" ou "user"
 
+        # Déconnexion automatique de l'Administrateur après inactivité
+        self.last_activity = time.monotonic()
+        for seq in ("<Motion>", "<ButtonPress>", "<MouseWheel>", "<KeyPress>"):
+            self.bind_all(seq, self._register_activity, add="+")
+        self.after(1000, self._check_idle)
+
         self.container = ttk.Frame(self)
         self.container.pack(fill="both", expand=True)
 
@@ -142,6 +152,21 @@ class App(tk.Tk):
         # depuis l'onglet Sécurité. Seul le rôle Utilisateur est refusé
         # tant que le logiciel est expiré (voir LoginScreen.try_login).
         self.show_login()
+
+    def _register_activity(self, event=None):
+        self.last_activity = time.monotonic()
+
+    def _check_idle(self):
+        try:
+            if (self.role == "admin"
+                    and time.monotonic() - self.last_activity >= ADMIN_IDLE_TIMEOUT_SECONDS):
+                # Ferme les éventuelles fenêtres secondaires ouvertes
+                for w in self.winfo_children():
+                    if isinstance(w, tk.Toplevel):
+                        w.destroy()
+                self.show_login()
+        finally:
+            self.after(1000, self._check_idle)
 
     def show_expired(self):
         self.role = None
@@ -164,6 +189,7 @@ class App(tk.Tk):
 
     def show_login(self):
         self.role = None
+        self.last_activity = time.monotonic()
         self.clear()
         LoginScreen(self.container, self)
 
