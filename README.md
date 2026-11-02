@@ -19,6 +19,12 @@ protégés par mot de passe.
   tranches, réduction IUTS selon les personnes à charge, charges patronales).
   → **Vérifié cellule par cellule contre le fichier Excel fourni : résultats identiques.**
 - **Export Excel** de l'état de paie du mois (bouton "Exporter vers Excel").
+- **Registre de paie** : un tableau récapitulatif avec, pour chaque employé, tous les
+  éléments de paie (gains détaillés, retenues, net, charges patronales, coût employeur)
+  et une ligne de totaux — exportable en PDF paysage (multi-pages, en-tête répété,
+  logo et pied de page de l'entreprise).
+- **Duplication vers le mois suivant** (onglet Saisie des employés) : recopie toute la
+  liste du dernier mois saisi vers le mois suivant pour préparer la paie à venir.
 - **Bulletins de paie PDF**, individuels ou pour toute la période, avec en-tête
   (nom, adresse, téléphone, email de l'entreprise) et pied de page personnalisables
   dans l'onglet Paramètres.

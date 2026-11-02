@@ -46,6 +46,7 @@ de run).
 | `auth.py` | Authentification : mot de passe Admin fixe + génération du mot de passe Utilisateur mensuel |
 | `storage.py` | Sauvegarde locale JSON (`donnees.json`) |
 | `expiration.py` | Verrou de date d'expiration du logiciel |
+| `register_pdf.py` | Génération du PDF du registre de paie (sans Tkinter, testable seul) |
 | `requirements.txt` | Dépendances Python (`openpyxl`, `reportlab`, `pyinstaller`) |
 | `build_exe.bat` | Script de compilation locale Windows |
 | `.github/workflows/*.yml` | Compilation automatique GitHub Actions |
@@ -135,6 +136,16 @@ comprendre avant de continuer :
   `find_base_for_target_net` dans `payroll_engine.py`), avec option
   d'indemnités "optimisées" aux plafonds fiscaux exonérés ; bouton pour
   créer directement l'employé à partir du résultat
+- **Registre de paie** (onglet dédié) : une ligne par employé avec tous les
+  éléments de paie + totaux, filtre par période, export PDF paysage via
+  `register_pdf.py` (⚠ fichier à AJOUTER au dépôt, il est nouveau)
+- **Duplication vers le mois suivant** : bouton dans Saisie des employés,
+  recopie les employés du mois le plus récent vers le mois suivant
+- **Connexion même si expiré** : l'écran de connexion reste toujours
+  affiché ; seul l'Administrateur peut entrer quand le logiciel est expiré
+  (bandeau rouge d'avertissement), l'Utilisateur est refusé
+- Le champ « Forcer un mot de passe Utilisateur » (Sécurité) est masqué
+  (•••), **sans** case « Afficher » (retirée à la demande de l'utilisateur)
 - **Formatage** : tous les montants affichés avec séparateur de milliers
   (espace) et sans décimales inutiles dans tous les tableaux/menus
 

@@ -15,7 +15,6 @@ Lancer avec :  python main.py
 
 import datetime
 import os
-import time
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from dataclasses import replace
@@ -101,9 +100,6 @@ def fmt_amount(v):
     return f"{f:,.0f}".replace(",", " ")
 
 
-ADMIN_IDLE_TIMEOUT_SECONDS = 5 * 60  # 5 minutes d'inactivité => déconnexion admin
-
-
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -136,12 +132,6 @@ class App(tk.Tk):
             raise
         self.role = None  # "admin" ou "user"
 
-        # Déconnexion automatique de l'Administrateur après inactivité
-        self.last_activity = time.monotonic()
-        for seq in ("<Motion>", "<ButtonPress>", "<MouseWheel>", "<KeyPress>"):
-            self.bind_all(seq, self._register_activity, add="+")
-        self.after(1000, self._check_idle)
-
         self.container = ttk.Frame(self)
         self.container.pack(fill="both", expand=True)
 
@@ -152,21 +142,6 @@ class App(tk.Tk):
         # depuis l'onglet Sécurité. Seul le rôle Utilisateur est refusé
         # tant que le logiciel est expiré (voir LoginScreen.try_login).
         self.show_login()
-
-    def _register_activity(self, event=None):
-        self.last_activity = time.monotonic()
-
-    def _check_idle(self):
-        try:
-            if (self.role == "admin"
-                    and time.monotonic() - self.last_activity >= ADMIN_IDLE_TIMEOUT_SECONDS):
-                # Ferme les éventuelles fenêtres secondaires ouvertes
-                for w in self.winfo_children():
-                    if isinstance(w, tk.Toplevel):
-                        w.destroy()
-                self.show_login()
-        finally:
-            self.after(1000, self._check_idle)
 
     def show_expired(self):
         self.role = None
@@ -189,7 +164,6 @@ class App(tk.Tk):
 
     def show_login(self):
         self.role = None
-        self.last_activity = time.monotonic()
         self.clear()
         LoginScreen(self.container, self)
 
@@ -265,10 +239,17 @@ class LoginScreen(ttk.Frame):
 
         ttk.Label(form, text="Mot de passe :").grid(row=1, column=0, sticky="e", padx=6, pady=6)
         self.pwd_var = tk.StringVar()
+        self.show_pwd_var = tk.BooleanVar(value=False)
         pwd_entry = ttk.Entry(form, textvariable=self.pwd_var, show="•", width=23)
         pwd_entry.grid(row=1, column=1, sticky="w", padx=6, pady=6)
         pwd_entry.bind("<Return>", lambda e: self.try_login())
         pwd_entry.focus_set()
+
+        def toggle_show():
+            pwd_entry.config(show="" if self.show_pwd_var.get() else "•")
+
+        ttk.Checkbutton(form, text="Afficher le mot de passe", variable=self.show_pwd_var,
+                         command=toggle_show).grid(row=2, column=1, sticky="w", padx=6)
 
         ttk.Button(center, text="Se connecter", command=self.try_login).pack(pady=16)
 
@@ -297,8 +278,9 @@ class LoginScreen(ttk.Frame):
             else:
                 messagebox.showerror("Connexion refusée",
                                       "Mot de passe administrateur incorrect.\n\n"
-                                      "Attention aux claviers AZERTY : les chiffres "
-                                      "nécessitent la touche Maj.")
+                                      "Astuce : cochez « Afficher le mot de passe » pour vérifier "
+                                      "exactement ce qui est tapé (attention aux claviers AZERTY "
+                                      "pour les chiffres, qui nécessitent la touche Maj).")
         else:
             if expiration.is_expired(cfg):
                 messagebox.showerror(
@@ -355,6 +337,9 @@ class MainScreen(ttk.Frame):
 
         self.payroll_tab = PayrollTab(notebook, app, self.employees_tab)
         notebook.add(self.payroll_tab, text="Bulletins / État de paie")
+
+        self.register_tab = RegisterTab(notebook, app)
+        notebook.add(self.register_tab, text="Registre de paie")
 
         self.accounting_tab = AccountingTab(notebook, app, self.payroll_tab)
         notebook.add(self.accounting_tab, text="Écritures comptables")
@@ -1544,6 +1529,175 @@ class AccountingTab(ttk.Frame):
 
         wb.save(path)
         messagebox.showinfo("Export réussi", f"Fichier exporté :\n{path}")
+
+
+# ==========================================================================
+# ONGLET REGISTRE DE PAIE (tous les éléments de paie de chaque employé)
+# ==========================================================================
+
+# (clé, en-tête à l'écran, largeur en pixels, est un montant)
+REGISTER_COLUMNS = [
+    ("numero", "N°", 40, False),
+    ("nom_prenoms", "Nom & Prénoms", 170, False),
+    ("classification", "Classif.", 65, False),
+    ("personnes_a_charge", "Pers. charge", 80, False),
+    ("salaire_base", "Salaire de base", 100, True),
+    ("prime_anciennete", "Prime anc.", 80, True),
+    ("heures_sup", "Heures sup.", 80, True),
+    ("sursalaire", "Sursalaire", 80, True),
+    ("gratification", "Gratif.", 80, True),
+    ("indemnite_caisse", "Ind. caisse", 85, True),
+    ("indemnite_logement", "Ind. logement", 95, True),
+    ("indemnite_fonction", "Ind. fonction", 95, True),
+    ("indemnite_transport", "Ind. transport", 100, True),
+    ("remuneration_totale", "Rémunération totale", 125, True),
+    ("cnss_salariale", "CNSS salariale", 100, True),
+    ("base_imposable", "Base imposable", 105, True),
+    ("iuts_net", "IUTS", 85, True),
+    ("retenue_obligatoire", "Ret. oblig. 1%", 95, True),
+    ("retenue_pret", "Ret. prêt", 85, True),
+    ("net_percu", "NET PERÇU", 105, True),
+    ("cnss_patronale", "CNSS patronale", 105, True),
+    ("tpa_patronale", "TPA", 80, True),
+    ("cout_total_employeur", "Coût total employeur", 130, True),
+]
+
+
+class RegisterTab(ttk.Frame):
+    def __init__(self, parent, app: App):
+        super().__init__(parent)
+        self.app = app
+        self.last_results = []
+        self.last_period_text = ""
+
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=6, pady=6)
+        ttk.Label(top, text="Registre de paie :", font=("Segoe UI", 11, "bold")).pack(side="left")
+
+        today = datetime.date.today()
+        ttk.Label(top, text="  Période :").pack(side="left")
+        self.mois_var = tk.StringVar(value=MOIS_FR[today.month - 1])
+        ttk.Combobox(top, textvariable=self.mois_var, values=MOIS_FR, state="readonly",
+                     width=12).pack(side="left", padx=4)
+        self.annee_var = tk.StringVar(value=str(today.year))
+        ttk.Entry(top, textvariable=self.annee_var, width=6).pack(side="left")
+
+        self.all_periods_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="Toutes périodes confondues",
+                         variable=self.all_periods_var).pack(side="left", padx=(10, 0))
+
+        ttk.Button(top, text="Afficher le registre", command=self.generate).pack(side="left", padx=16)
+        ttk.Button(top, text="Exporter en PDF", command=self.export_pdf).pack(side="left")
+
+        cols = [c[0] for c in REGISTER_COLUMNS]
+        tree_frame = ttk.Frame(self)
+        tree_frame.pack(fill="both", expand=True, padx=6, pady=6)
+        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=20)
+        for key, label, width, is_money in REGISTER_COLUMNS:
+            self.tree.heading(key, text=label)
+            self.tree.column(key, width=width, anchor="e" if is_money else "center",
+                             stretch=False)
+        self.tree.column("nom_prenoms", anchor="w")
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
+        hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+        self.tree.tag_configure("total", font=("Segoe UI", 9, "bold"), background="#dce6f1")
+
+        self.summary_label = ttk.Label(self, text="", font=("Segoe UI", 10, "bold"))
+        self.summary_label.pack(anchor="w", padx=6, pady=(0, 6))
+
+    def selected_period_key(self):
+        month = MOIS_FR.index(self.mois_var.get()) + 1
+        try:
+            year = int(self.annee_var.get())
+        except ValueError:
+            year = datetime.date.today().year
+        return f"{year:04d}-{month:02d}"
+
+    def _compute(self):
+        """Calcule les bulletins des employés de la période choisie."""
+        employees = self.app.config_data["employees"]
+        if not self.all_periods_var.get():
+            key = self.selected_period_key()
+            employees = [e for e in employees if e.get("periode") == key]
+        params = self.app.config_data["params"]
+        results = [compute_payslip(Employee(**e), params) for e in employees]
+        results.sort(key=lambda r: r["numero"])
+        if self.all_periods_var.get():
+            period_text = "Toutes périodes"
+        else:
+            period_text = format_period(self.selected_period_key())
+        return results, period_text
+
+    def generate(self):
+        results, period_text = self._compute()
+        self.tree.delete(*self.tree.get_children())
+        self.last_results = results
+        self.last_period_text = period_text
+        if not results:
+            self.summary_label.config(text="")
+            messagebox.showinfo("Info", f"Aucun employé pour la période sélectionnée ({period_text}).")
+            return
+
+        money_keys = [c[0] for c in REGISTER_COLUMNS if c[3]]
+        for r in results:
+            values = [fmt_amount(r[k]) if k in money_keys else r[k] for k, _, _, _ in REGISTER_COLUMNS]
+            self.tree.insert("", "end", values=values)
+
+        totals = {k: sum(r[k] for r in results) for k in money_keys}
+        total_values = []
+        for key, _, _, is_money in REGISTER_COLUMNS:
+            if key == "nom_prenoms":
+                total_values.append(f"TOTAL ({len(results)})")
+            elif is_money:
+                total_values.append(fmt_amount(totals[key]))
+            else:
+                total_values.append("")
+        self.tree.insert("", "end", values=total_values, tags=("total",))
+
+        self.summary_label.config(
+            text=(f"{period_text}  —  Effectif : {len(results)}  |  "
+                  f"Total Net Perçu : {fmt_amount(totals['net_percu'])}  |  "
+                  f"Coût total employeur : {fmt_amount(totals['cout_total_employeur'])}  FCFA"))
+
+    def export_pdf(self):
+        results, period_text = self._compute()
+        if not results:
+            messagebox.showinfo("Info", f"Aucun employé pour la période sélectionnée ({period_text}).")
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF", "*.pdf")],
+            initialfile=f"Registre_de_paie_{period_text.replace(' ', '_')}.pdf",
+        )
+        if not path:
+            return
+        try:
+            import register_pdf
+        except ImportError as exc:
+            messagebox.showerror(
+                "Module manquant",
+                "Le module « register_pdf » ou « reportlab » est introuvable.\n"
+                "Vérifiez que le fichier register_pdf.py est bien présent dans le projet "
+                f"et que reportlab est installé.\n\nDétail : {exc}")
+            return
+        try:
+            register_pdf.build_register_pdf(
+                results, path,
+                entete=self.app.config_data.get("bulletin_entete", {}) or {},
+                pied=self.app.config_data.get("bulletin_pied_de_page", "") or "",
+                period_text=period_text,
+            )
+        except Exception as exc:
+            messagebox.showerror("Erreur", f"Impossible de générer le PDF : {exc}")
+            return
+        messagebox.showinfo("Export réussi",
+                             f"Registre de paie ({len(results)} employé(s)) généré :\n{path}")
 
 
 # ==========================================================================
